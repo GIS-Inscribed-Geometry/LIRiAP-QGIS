@@ -1,25 +1,13 @@
-"""
-LIRiAP Contained Standard worker module.
-
-Contains pure geometry solving and certification routines with no QGIS/Qt
-runtime dependencies.
-"""
-
 # ===========================================================================
-# inscribed_rect_worker_claude.py  ·  v3  (two-stage edge-guided solver)
-# Pure-geometry worker — no QGIS objects.  Drop into the QGIS plugin folder.
+# inscribed_rect_worker.py  ·  v5
+# Pure-geometry worker — no QGIS objects.
 #
-# Pipeline per feature:
-#   Stage 1  –  Edge-guided angle candidates + coarse grid solve → top-K candidates
-#   Stage 2  –  Per-candidate: (A) Brent angle polish + (B) fine grid solve
-#                               + (C) containment certification (with optional buffer)
-#
-# Key algorithms:
-#   _edge_candidate_angles()   – polygon edge-orientation histogram → dominant dirs
-#   _solve_axis_rect_grid()    – scanline histogram over binary PIP mask (Numba JIT)
-#   _polish_angle()            – Brent scalar minimisation ±3° around best angle
-#   _certify_and_adjust()      – symmetric shrink to guarantee containment
-#   _solve_axis_rect_slab()    – analytic slab solver (used as utility / reference)
+# Pipeline per feature
+# ──────────────────────────────────────────────────────────────────────────
+#   Stage 1  – Edge-guided angle candidates + coarse grid → top-K candidates
+#   Stage 2  – Local angle polishing around each Stage 1 candidate
+#   Stage 3  – Fine-grid solve at polished and original angles
+#   Stage 4  – Explicit containment certification (symmetric shrink fallback)
 # ===========================================================================
 from __future__ import annotations
 
@@ -287,7 +275,7 @@ def _upper_bound_area(poly, angle, max_ratio, centroid):
 
 def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
                            max_ratio, top_k):
-    """Stage 1: generate top_k angle candidates using edge-guided heuristic."""
+    """Stage 1 candidate generation using edge-guided heuristic search."""
     centroid = poly.centroid
     cx, cy   = centroid.x, centroid.y
     raw      = []
@@ -337,11 +325,7 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
 
 
 # ==========================================================================
-# ⑤ STAGE 2 REFINEMENT
-#    Phase A: Brent scalar minimisation (angle polish, ±3°, tol 0.05°)
-#    Phase B: fine-grid solve at the polished angle  
-#    Phase C: containment certification + optional user buffer
-#    Accept polished result only if it certifies better than baseline.
+# ⑤ STAGE 2 — REFINEMENT
 # ==========================================================================
 _PHASE_A_XATOL     = 0.05    # degrees tolerance for Brent
 _PHASE_A_HALFWIDTH = 3.0     # ± bracket in degrees
@@ -350,7 +334,7 @@ _CERT_MAX_SHRINK   = 0.2    # maximum symmetric shrink as fraction of shorter si
 
 
 def _polish_angle(poly, candidate, grid_fine, max_ratio):
-    """Phase A: Brent minimisation around candidate angle."""
+    """Stage 2: Brent minimisation around candidate angle."""
     angle_0  = candidate['angle']
     centroid = Point(candidate['center'])
     lo, hi   = angle_0 - _PHASE_A_HALFWIDTH, angle_0 + _PHASE_A_HALFWIDTH
@@ -399,7 +383,7 @@ def _build_rect_from_frame(cx, cy, ux, uy, vx, vy, a, b):
 
 def _certify_and_adjust(poly, rect, max_ratio, buf_enabled, buf_value):
     """
-    Phase C: guarantee containment, optionally apply user buffer.
+    Stage 4: guarantee containment, optionally apply user buffer.
     Returns (rect, area) or (None, 0.0).
     """
     if rect is None or rect.is_empty: return None, 0.0
@@ -551,7 +535,7 @@ def _best_effort_shrink_to_cover(poly, rect, max_ratio, tol=1e-7, max_iter=40):
 
 def _refine_best_candidate(poly, candidates, grid_fine, max_ratio,
                             buf_enabled, buf_value, always_return):
-    """Full Stage 2 pipeline: A+B+C per candidate, return best certified."""
+    """Full Stage 2 pipeline. Returns 7-tuple or None."""
     certified = []
     fallback_best = None
 

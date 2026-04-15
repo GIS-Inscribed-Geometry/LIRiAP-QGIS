@@ -1,15 +1,13 @@
-
-"""
-inscribed_rect_worker_claude.py
-========================
-Pure-geometry worker module — NO QGIS / Qt imports.
-Workers import this file cleanly under all platforms.
-"""
-
 """
 LIRiAP Approximation Fast worker module.
 
 Pure geometry routines used by the QGIS algorithm wrapper. No QGIS/Qt imports.
+
+Stage model (consistent with README):
+1. Edge-guided coarse candidate search.
+2. Local angle polishing around top candidates.
+3. Fine-grid solve at the best angle neighborhood.
+4. Optional output buffer application.
 """
 
 import numpy as np
@@ -166,6 +164,7 @@ def _search_one(shapely_poly, angle_step, grid_coarse, grid_fine,
     best_rect  = None
     best_angle = 0.0
 
+    # ── Stage 1: edge-guided candidates ─────────────────────────────────────
     candidates = _edge_candidate_angles(shapely_poly)
     if len(candidates) >= 2:
         gaps = np.diff(np.sort(candidates))
@@ -173,6 +172,7 @@ def _search_one(shapely_poly, angle_step, grid_coarse, grid_fine,
     else:
         half_window = 10.0
 
+    # ── Stage 2: coarse-grid evaluation with early rejection ─────────────────
     bounds = [(a, _upper_bound(shapely_poly, a, max_ratio, centroid))
               for a in candidates]
     bounds.sort(key=lambda t: t[1], reverse=True)
@@ -187,6 +187,7 @@ def _search_one(shapely_poly, angle_step, grid_coarse, grid_fine,
             best_rect  = rect
             best_angle = float(angle)
 
+    # ── Stage 2: fallback uniform sweep for isotropic/featureless polygons ───
     if best_rect is None or len(candidates) <= 4:
         for angle in range(0, 180, angle_step):
             a  = float(angle % 90)
@@ -203,6 +204,7 @@ def _search_one(shapely_poly, angle_step, grid_coarse, grid_fine,
     if best_rect is None:
         return None
 
+    # ── Stage 3: narrow continuous refinement around best_angle ─────────────
     def _neg_area_fine(a):
         rp = rotate(shapely_poly, -a, origin=centroid, use_radians=False)
         _, area = _solve_axis_rect(rp, grid_fine, max_ratio)
@@ -224,6 +226,7 @@ def _search_one(shapely_poly, angle_step, grid_coarse, grid_fine,
 
     final_rect = rotate(best_rect, best_angle, origin=centroid, use_radians=False)
 
+    # ── Stage 4: optional containment buffer ─────────────────────────────────
     if buf_enabled and buf_value != 0.0:
         candidate = final_rect.buffer(buf_value, cap_style=3, join_style=2)
         if not candidate.is_empty and candidate.area > 0:
@@ -235,6 +238,45 @@ def _search_one(shapely_poly, angle_step, grid_coarse, grid_fine,
     ratio = (max(w, h) / min(w, h)) if min(w, h) > 0 else 0.0
 
     return final_rect, final_rect.area, best_angle, ratio
+
+
+# ---------------------------------------------------------------------------
+# MODULE-LEVEL WORKER ENTRY
+# ---------------------------------------------------------------------------
+def _worker_process_feature(args):
+    """
+    Standalone worker function for multiprocessing/thread workers.
+
+    Parameters
+    ----------
+    args : tuple
+        (feat_id, wkb_bytes, angle_step, grid_coarse, grid_fine,
+         max_ratio, buf_enabled, buf_value)
+
+    Returns
+    -------
+    tuple or None
+        (feat_id, wkt, area, angle, ratio) or None
+    """
+    (feat_id, wkb_bytes, angle_step, grid_coarse, grid_fine,
+     max_ratio, buf_enabled, buf_value) = args
+    try:
+        poly = wkb_loads(bytes(wkb_bytes))
+        result = _search_one(
+            poly, angle_step, grid_coarse, grid_fine, max_ratio, buf_enabled, buf_value
+        )
+        if result is None:
+            return None
+        rect, area, angle, ratio = result
+        return (
+            feat_id,
+            rect.wkt,
+            round(float(area), 4),
+            round(float(angle), 2),
+            round(float(ratio), 4),
+        )
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -256,16 +298,12 @@ def process_slice(job_array, start, end,
     out = {}
     for i in range(start, end):
         feat_id, wkb_bytes = job_array[i]
-        try:
-            poly   = wkb_loads(wkb_bytes)          # bytes already interned
-            result = _search_one(poly, angle_step, grid_coarse, grid_fine,
-                                 max_ratio, buf_enabled, buf_value)
-            if result is not None:
-                rect, area, angle, ratio = result
-                out[feat_id] = (rect.wkt,
-                                round(area,  4),
-                                round(angle, 2),
-                                round(ratio, 4))
-        except Exception:
-            pass
+        res = _worker_process_feature(
+            (feat_id, wkb_bytes, angle_step, grid_coarse, grid_fine,
+             max_ratio, buf_enabled, buf_value)
+        )
+        if res is None:
+            continue
+        _, wkt, area, angle, ratio = res
+        out[feat_id] = (wkt, area, angle, ratio)
     return out

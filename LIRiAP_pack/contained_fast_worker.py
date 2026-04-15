@@ -1,25 +1,14 @@
-"""
-LIRiAP Contained Fast worker module.
-
-Contains pure geometry solving and certification routines with no QGIS/Qt
-runtime dependencies.
-"""
-
 # ===========================================================================
-# inscribed_rect_worker_claude.py  ·  v3  (two-stage edge-guided solver)
-# Pure-geometry worker — no QGIS objects.  Drop into the QGIS plugin folder.
+# inscribed_rect_worker.py  ·  v5
+# Pure-geometry worker — no QGIS objects.
 #
-# Pipeline per feature:
-#   Stage 1  –  Edge-guided angle candidates + coarse grid solve → top-K candidates
-#   Stage 2  –  Per-candidate: (A) Brent angle polish + (B) fine grid solve
-#                               + (C) containment certification (with optional buffer)
+# Pipeline per feature
+# ──────────────────────────────────────────────────────────────────────────
+#   Stage 1  – Edge-guided angle candidates + coarse grid → top-K candidates
+#   Stage 2  – Local angle polishing around each Stage 1 candidate
+#   Stage 3  – Fine-grid solve at polished and original angles
+#   Stage 4  – Explicit containment certification (symmetric shrink fallback)
 #
-# Key algorithms:
-#   _edge_candidate_angles()   – polygon edge-orientation histogram → dominant dirs
-#   _solve_axis_rect_grid()    – scanline histogram over binary PIP mask (Numba JIT)
-#   _polish_angle()            – Brent scalar minimisation ±3° around best angle
-#   _certify_and_adjust()      – symmetric shrink to guarantee containment
-#   _solve_axis_rect_slab()    – analytic slab solver (used as utility / reference)
 # ===========================================================================
 from __future__ import annotations
 
@@ -31,8 +20,13 @@ from shapely.prepared import prep as shp_prep
 from shapely.wkb import loads as wkb_loads
 from scipy.optimize import minimize_scalar
 
+try:
+    from shapely.prepared import prep as _prep_geom
+except Exception:
+    _prep_geom = None
+
 # --------------------------------------------------------------------------
-# Vectorised point-in-polygon (Shapely 1.x + 2.x compat)
+# Vectorised point-in-polygon  (Shapely 1.x + 2.x compat)
 # --------------------------------------------------------------------------
 try:
     from shapely.vectorized import contains as _shp_contains_vec
@@ -55,12 +49,23 @@ except ImportError:
         return fn if fn is not None else (lambda f: f)
     _NUMBA_AVAILABLE = False
 
+# --------------------------------------------------------------------------
+# Tuning constants
+# --------------------------------------------------------------------------
+_PHASE_A_XATOL      = 0.02   # Brent angle tolerance [deg]  (tightened from 0.05)
+_PHASE_A_HALFWIDTH  = 3.0    # Brent bracket half-width [deg]
+_CERT_EPS           = 1e-7   # Safety inset after certification
+_CERT_MAX_SHRINK    = 0.20   # Max symmetric shrink as fraction of shorter side
+_PRUNE_MARGIN       = 0.90   # Upper-bound pruning factor  (raised from 0.85)
+_SIMPLIFY_THRESHOLD = 300    # Vertex count above which simplification is tried
+_SIMPLIFY_TOL_FRAC  = 0.001  # Simplification tol as fraction of short bbox side
+
 
 # ==========================================================================
 # ① JIT HISTOGRAM KERNEL
-#    Classic O(n) largest-rectangle-in-histogram, operating on
-#    integer height arrays over real-valued CRS coordinate arrays.
-#    Stack uses two pre-allocated arrays → zero heap allocation inside JIT.
+#    O(n) largest-rectangle-in-histogram via monotone stack.
+#    Pre-allocated stack arrays → zero heap allocation inside JIT.
+#    Aspect-ratio constraint applied analytically per candidate rectangle.
 # ==========================================================================
 @_njit(cache=True)
 def _histogram_kernel(heights, xs, ys, row_idx, max_ratio):
@@ -69,7 +74,6 @@ def _histogram_kernel(heights, xs, ys, row_idx, max_ratio):
     n_ys  = len(ys)
     best  = 0.0
     bx0 = by0 = bx1 = by1 = 0.0
-    # Pre-allocated stack
     st_col = np.empty(cols + 1, dtype=np.int64)
     st_h   = np.empty(cols + 1, dtype=np.int64)
     top    = 0
@@ -113,10 +117,29 @@ def _histogram_kernel(heights, xs, ys, row_idx, max_ratio):
     return bx0, by0, bx1, by1, best
 
 
+# --------------------------------------------------------------------------
+# Prepared-geometry helpers
+# --------------------------------------------------------------------------
+def _make_prepared(poly):
+    if poly is None or poly.is_empty or _prep_geom is None:
+        return None
+    try:
+        return _prep_geom(poly)
+    except Exception:
+        return None
+
+
+def _covers(poly, candidate, prepared_poly=None):
+    if prepared_poly is not None:
+        return prepared_poly.covers(candidate)
+    return poly.covers(candidate)
+
+
 # ==========================================================================
 # ② GRID-BASED AXIS-ALIGNED RECTANGLE SOLVER
-#    Rasterises the polygon at grid_steps × grid_steps resolution,
-#    builds a running scanline height-map, and calls the histogram kernel.
+#    Rasterises the (pre-rotated) polygon onto a grid_steps × grid_steps
+#    binary mask and runs the JIT histogram kernel row by row.
+#    Works correctly for all polygon types including non-convex and holed.
 # ==========================================================================
 def _solve_axis_rect_grid(poly, grid_steps, max_ratio):
     minx, miny, maxx, maxy = poly.bounds
@@ -130,7 +153,7 @@ def _solve_axis_rect_grid(poly, grid_steps, max_ratio):
 
     for r in range(grid_steps):
         row      = mask[r].astype(np.int64)
-        heights += row; heights *= row          # in-place, no temp allocation
+        heights += row; heights *= row
         x0, y0, x1, y1, area = _histogram_kernel(heights, xs, ys, r, max_ratio)
         if area > best_area:
             best_area = area; best_rect = box(x0, y0, x1, y1)
@@ -139,234 +162,223 @@ def _solve_axis_rect_grid(poly, grid_steps, max_ratio):
 
 
 # ==========================================================================
-# ③ ANALYTIC SLAB SOLVER (utility / reference; not in the hot path)
-#    For simple convex polygons this gives exact axis-aligned results.
-#    Evaluates y-intervals at both slab endpoints to avoid mid-point bias.
+# ③ EDGE-GUIDED ANGLE CANDIDATE GENERATOR
+#    Builds a length-weighted edge-orientation histogram over [0°, 90°),
+#    smooths it with a Gaussian-like kernel, and extracts local maxima as
+#    candidate angles.  Both exterior and interior ring edges are included
+#    so that hole boundaries contribute (important for parcels with buildings
+#    or courtyards that share the dominant orientation).
+#    Bin accumulation uses np.add.at (vectorised; replaces Python loop).
 # ==========================================================================
-def _edge_y_crossings_at_x(ring_coords, x_query):
-    crossings = []
-    n = len(ring_coords) - 1
-    for i in range(n):
-        xa, ya = ring_coords[i, 0], ring_coords[i, 1]
-        xb, yb = ring_coords[i+1, 0], ring_coords[i+1, 1]
-        xlo = min(xa, xb); xhi = max(xa, xb)
-        if xlo < x_query <= xhi:
-            dx = xb - xa
-            if abs(dx) < 1e-14: continue
-            crossings.append(ya + (x_query - xa) / dx * (yb - ya))
-    crossings.sort()
-    return crossings
+def _edge_candidate_angles(poly: Polygon,
+                            min_sep_deg: float = 4.0,
+                            max_candidates: int = 12) -> np.ndarray:
+    coord_sets = [np.asarray(poly.exterior.coords, dtype=np.float64)]
+    for interior in poly.interiors:
+        coord_sets.append(np.asarray(interior.coords, dtype=np.float64))
 
+    all_edges = []; all_lengths = []
+    for coords in coord_sets:
+        edges   = np.diff(coords, axis=0)
+        lengths = np.hypot(edges[:, 0], edges[:, 1])
+        valid   = lengths > 1e-12
+        if valid.any():
+            all_edges.append(edges[valid])
+            all_lengths.append(lengths[valid])
 
-def _net_valid_y_intervals(rot_poly, x_mid):
-    ext_arr = np.asarray(rot_poly.exterior.coords, dtype=np.float64)
-    ext_c   = _edge_y_crossings_at_x(ext_arr, x_mid)
-    include = [(ext_c[k], ext_c[k+1]) for k in range(0, len(ext_c)-1, 2)]
-    if not include:
-        return []
-    free = list(include)
-    for interior in rot_poly.interiors:
-        h_arr = np.asarray(interior.coords, dtype=np.float64)
-        h_c   = _edge_y_crossings_at_x(h_arr, x_mid)
-        for k in range(0, len(h_c)-1, 2):
-            hlo, hhi = h_c[k], h_c[k+1]
-            new_free = []
-            for (flo, fhi) in free:
-                if hhi <= flo or hlo >= fhi:
-                    new_free.append((flo, fhi))
-                else:
-                    if flo < hlo: new_free.append((flo, hlo))
-                    if hhi < fhi: new_free.append((hhi, fhi))
-            free = new_free
-        if not free: return []
-    return free
-
-
-def _solve_axis_rect_slab(rot_poly, max_ratio, n_extra=6):
-    """Analytic slab sweep. Evaluates y-intervals at both slab endpoints."""
-    if not isinstance(rot_poly, Polygon) or rot_poly.is_empty:
-        return None, 0.0
-    minx, miny, maxx, maxy = rot_poly.bounds
-    if maxx - minx < 1e-12 or maxy - miny < 1e-12:
-        return None, 0.0
-
-    all_x = list(np.asarray(rot_poly.exterior.coords)[:, 0])
-    for interior in rot_poly.interiors:
-        all_x.extend(np.asarray(interior.coords)[:, 0].tolist())
-    xev = np.unique(np.array(all_x, dtype=np.float64))
-    xev = xev[(xev > minx + 1e-12) & (xev < maxx - 1e-12)]
-    xb  = np.unique(np.concatenate([[minx], xev, [maxx]]))
-
-    slabs = []
-    for i in range(len(xb)-1):
-        xa, xb_i = float(xb[i]), float(xb[i+1])
-        dx = (xb_i - xa) / (n_extra + 1)
-        for k in range(n_extra + 1):
-            slabs.append((xa + k*dx, xa + (k+1)*dx))
-
-    EPS = 1e-9
-    n   = len(slabs)
-    ylo = np.full(n, np.nan); yhi = np.full(n, np.nan)
-
-    for i, (xl, xr) in enumerate(slabs):
-        ivs_l = _net_valid_y_intervals(rot_poly, xl + EPS)
-        ivs_r = _net_valid_y_intervals(rot_poly, xr - EPS)
-        if not ivs_l or not ivs_r: continue
-        bl = max(ivs_l, key=lambda iv: iv[1]-iv[0])
-        br = max(ivs_r, key=lambda iv: iv[1]-iv[0])
-        lo = max(bl[0], br[0]) + EPS
-        hi = min(bl[1], br[1]) - EPS
-        if hi > lo: ylo[i] = lo; yhi[i] = hi
-
-    best_area = 0.0; best_box = None
-    for l in range(n):
-        if math.isnan(ylo[l]): continue
-        cur_lo, cur_hi = ylo[l], yhi[l]
-        for r in range(l, n):
-            if math.isnan(ylo[r]): break
-            cur_lo = max(cur_lo, ylo[r])
-            cur_hi = min(cur_hi, yhi[r])
-            if cur_hi <= cur_lo: break
-            rx0 = slabs[l][0]; rx1 = slabs[r][1]
-            rw  = rx1 - rx0;   rh  = cur_hi - cur_lo
-            if rw <= 0 or rh <= 0: continue
-            if max_ratio > 0.0:
-                ls = max(rw,rh); ss = min(rw,rh)
-                if ss > 0 and ls/ss > max_ratio:
-                    nl = ss * max_ratio
-                    if rw >= rh:
-                        cx=(rx0+rx1)*0.5; rx0=cx-nl/2; rx1=cx+nl/2; rw=nl
-                    else:
-                        cy=(cur_lo+cur_hi)*0.5; cur_lo=cy-nl/2; cur_hi=cy+nl/2; rh=nl
-            area = rw * rh
-            if area > best_area:
-                best_area = area; best_box = box(rx0, cur_lo, rx1, cur_hi)
-    return best_box, best_area
-
-
-# ==========================================================================
-# ④ EDGE-GUIDED ANGLE CANDIDATE GENERATOR
-#    Builds a weighted edge-orientation histogram (weights = edge lengths),
-#    smooths it, and picks local maxima as candidate angles.
-#    Falls back to uniform sampling if the polygon has few distinct edges.
-# ==========================================================================
-def _edge_candidate_angles(poly, min_sep_deg=4.0, max_candidates=12):
-    coords  = np.asarray(poly.exterior.coords, dtype=np.float64)
-    edges   = np.diff(coords, axis=0)
-    lengths = np.hypot(edges[:, 0], edges[:, 1])
-    valid   = lengths > 1e-12
-    if not valid.any():
+    if not all_edges:
         return np.array([0.0, 45.0])
-    edges = edges[valid]; lengths = lengths[valid]
-    angles = np.degrees(np.arctan2(np.abs(edges[:,1]),
-                                   np.abs(edges[:,0]))) % 90.0
+
+    edges   = np.vstack(all_edges)
+    lengths = np.concatenate(all_lengths)
+    angles  = np.degrees(np.arctan2(np.abs(edges[:, 1]),
+                                    np.abs(edges[:, 0]))) % 90.0
+
     bins = np.zeros(91, dtype=np.float64)
-    for ang, wt in zip(angles, lengths):
-        bins[min(int(round(ang)), 90)] += wt
+    idx  = np.clip(np.round(angles).astype(np.int64), 0, 90)
+    np.add.at(bins, idx, lengths)
+
     kernel = np.array([0.1, 0.2, 0.4, 0.2, 0.1])
     bins   = np.convolve(bins, kernel, mode='same')
+
     sep    = max(1, int(min_sep_deg))
     peaks  = []
-    for idx in np.argsort(bins)[::-1]:
-        if not peaks or all(abs(int(idx)-p) >= sep for p in peaks):
-            peaks.append(int(idx))
+    for idx_p in np.argsort(bins)[::-1]:
+        if not peaks or all(abs(int(idx_p) - p) >= sep for p in peaks):
+            peaks.append(int(idx_p))
         if len(peaks) >= max_candidates:
             break
+
     return np.asarray(sorted(set(peaks) | {0, 45}), dtype=np.float64)
 
 
-def _upper_bound_area(poly, angle, max_ratio, centroid):
-    rot = shp_rotate(poly, -angle, origin=centroid, use_radians=False)
-    bw, bh = rot.bounds[2]-rot.bounds[0], rot.bounds[3]-rot.bounds[1]
+def _upper_bound_area(hull_poly, angle: float,
+                      max_ratio: float, centroid) -> float:
+    """
+    Cheap O(h) upper bound on the inscribed rectangle area at a given angle
+    (h = convex hull vertex count ≪ n).
+    Rotates the convex hull and uses half its bounding-box area as the bound
+    (provably valid for convex shapes; conservative for non-convex).
+    """
+    rot    = shp_rotate(hull_poly, -angle, origin=centroid, use_radians=False)
+    bw, bh = rot.bounds[2] - rot.bounds[0], rot.bounds[3] - rot.bounds[1]
     if max_ratio > 0.0:
-        ls = max(bw,bh); ss = min(bw,bh)
-        if ss > 0 and ls/ss > max_ratio: ls = ss * max_ratio
+        ls = max(bw, bh); ss = min(bw, bh)
+        if ss > 0 and ls / ss > max_ratio:
+            ls = ss * max_ratio
         return ls * ss * 0.5
     return bw * bh * 0.5
 
 
-def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
-                           max_ratio, top_k):
-    """Stage 1: generate top_k angle candidates using edge-guided heuristic."""
-    centroid = poly.centroid
-    cx, cy   = centroid.x, centroid.y
-    raw      = []
+def _simplify_for_solve(poly: Polygon):
+    """
+    Return (simplified_polygon, was_simplified).
+    Simplification tolerance = _SIMPLIFY_TOL_FRAC × shorter bbox side.
+    Applied only for Stage 1 coarse-grid calls on high-vertex polygons;
+    Stage 2 always uses the original polygon for accuracy.
+    """
+    n_verts = len(poly.exterior.coords)
+    for interior in poly.interiors:
+        n_verts += len(interior.coords)
+    if n_verts <= _SIMPLIFY_THRESHOLD:
+        return poly, False
+
+    minx, miny, maxx, maxy = poly.bounds
+    tol = min(maxx - minx, maxy - miny) * _SIMPLIFY_TOL_FRAC
+    if tol <= 0:
+        return poly, False
+    try:
+        simplified = poly.simplify(tol, preserve_topology=True)
+        if (simplified.is_empty
+                or not isinstance(simplified, Polygon)
+                or simplified.area <= 0):
+            return poly, False
+        return simplified, True
+    except Exception:
+        return poly, False
+
+
+# ==========================================================================
+# ④ STAGE 1 — HEURISTIC CANDIDATE GENERATOR
+#    Produces top_k (angle, coarse_rect, coarse_area) candidates.
+#
+#    Two-pass approach:
+#      Pass 1 — edge-guided angles (dominant edge orientations as prior).
+#      Pass 2 — uniform sweep fallback for featureless / isotropic polygons.
+#    Upper-bound pruning with _PRUNE_MARGIN skips angles whose theoretical
+#    maximum is already beaten by the running best, with a 10% safety margin.
+#    Convex hull (O(h) rotation) is used for all upper-bound queries.
+#    High-vertex polygons are simplified for the coarse grid call only.
+# ==========================================================================
+def _heuristic_candidates(poly: Polygon,
+                           angle_step: int,
+                           grid_coarse: int,
+                           grid_fine: int,
+                           max_ratio: float,
+                           top_k: int) -> list:
+    centroid   = poly.centroid
+    cx, cy     = centroid.x, centroid.y
+    hull       = poly.convex_hull          # used for upper-bound queries
+    simplified, _ = _simplify_for_solve(poly)
+
+    raw       = []
     best_area = 0.0
 
-    # Priority 1: dominant edge orientations
-    for angle in _edge_candidate_angles(poly):
-        ub = _upper_bound_area(poly, float(angle), max_ratio, centroid)
-        if ub <= best_area * 0.85:
-            continue
-        rot  = shp_rotate(poly, -float(angle), origin=centroid, use_radians=False)
-        rect, area = _solve_axis_rect_grid(rot, grid_coarse, max_ratio)
-        if area > 0:
-            raw.append((area, float(angle), rect))
-            if area > best_area: best_area = area
+    def _solve_coarse(angle_f: float):
+        rot_s = shp_rotate(simplified, -angle_f, origin=centroid, use_radians=False)
+        return _solve_axis_rect_grid(rot_s, grid_coarse, max_ratio)
 
-    # Priority 2: uniform fallback if edge heuristic under-covers
+    # Pass 1: dominant edge orientations
+    for angle in _edge_candidate_angles(poly):
+        a  = float(angle)
+        ub = _upper_bound_area(hull, a, max_ratio, centroid)
+        if ub <= best_area * _PRUNE_MARGIN:
+            continue
+        rect, area = _solve_coarse(a)
+        if area > 0:
+            raw.append((area, a, rect))
+            if area > best_area:
+                best_area = area
+
+    # Pass 2: uniform sweep — only when edge heuristic yields < 3 candidates
     if len(raw) < 3:
         for a_int in range(0, 90, angle_step):
             a = float(a_int)
             if any(abs(a - ar[1]) < 2.0 for ar in raw):
                 continue
-            ub = _upper_bound_area(poly, a, max_ratio, centroid)
-            if ub <= best_area * 0.85:
+            ub = _upper_bound_area(hull, a, max_ratio, centroid)
+            if ub <= best_area * _PRUNE_MARGIN:
                 continue
-            rot  = shp_rotate(poly, -a, origin=centroid, use_radians=False)
-            rect, area = _solve_axis_rect_grid(rot, grid_coarse, max_ratio)
+            rect, area = _solve_coarse(a)
             if area > 0:
                 raw.append((area, a, rect))
-                if area > best_area: best_area = area
+                if area > best_area:
+                    best_area = area
 
     raw.sort(key=lambda t: t[0], reverse=True)
 
-    # Deduplicate by angle proximity
+    # Deduplicate by 2° angle proximity, keep top_k
     kept = []; seen = []
     for area, angle, rect_rot in raw:
         if any(abs(angle - s) < 2.0 for s in seen):
             continue
         seen.append(angle)
         rect_world = shp_rotate(rect_rot, angle, origin=centroid, use_radians=False)
-        kept.append({'angle': angle, 'area': area,
-                     'rect_rot': rect_rot, 'rect_world': rect_world,
-                     'center': (cx, cy)})
+        kept.append({
+            'angle':      angle,
+            'area':       area,
+            'rect_rot':   rect_rot,
+            'rect_world': rect_world,
+            'center':     (cx, cy),
+        })
         if len(kept) >= top_k:
             break
     return kept
 
 
 # ==========================================================================
-# ⑤ STAGE 2 REFINEMENT
-#    Phase A: Brent scalar minimisation (angle polish, ±3°, tol 0.05°)
-#    Phase B: fine-grid solve at the polished angle  
-#    Phase C: containment certification + optional user buffer
-#    Accept polished result only if it certifies better than baseline.
+# ⑤ STAGE 2 — REFINEMENT
 # ==========================================================================
-_PHASE_A_XATOL     = 0.05    # degrees tolerance for Brent
-_PHASE_A_HALFWIDTH = 3.0     # ± bracket in degrees
-_CERT_EPS          = 1e-7    # inset after certification
-_CERT_MAX_SHRINK   = 0.2    # maximum symmetric shrink as fraction of shorter side
 
+def _polish_angle(poly: Polygon, candidate: dict,
+                  grid_coarse: int, max_ratio: float) -> dict:
+    """
+    Stage 2: Brent scalar minimisation ±_PHASE_A_HALFWIDTH degrees around
+    the candidate angle, using the COARSE grid as the objective function.
 
-def _polish_angle(poly, candidate, grid_fine, max_ratio):
-    """Phase A: Brent minimisation around candidate angle."""
+    Design rationale
+    ────────────────
+    Using the coarse grid inside Brent keeps each evaluation cheap (O(g²)
+    PIP tests, g = grid_coarse) while still capturing the shape of the
+    area-vs-angle landscape.  The fine-grid solve happens exactly once per
+    candidate in Stage 3 at the Brent-winning angle.
+
+    Tolerance _PHASE_A_XATOL = 0.02° gives sub-pixel angular precision
+    for any polygon whose shortest dimension is > 1 m in a 1:1000 CRS.
+
+    The Brent winner replaces the candidate angle whenever the angle shift
+    exceeds 0.005° (i.e. it actually moved — avoids floating-point noise
+    producing spurious dict copies).  No area comparison is made: Stage 3
+    always performs the definitive fine-grid solve regardless.
+    """
     angle_0  = candidate['angle']
     centroid = Point(candidate['center'])
     lo, hi   = angle_0 - _PHASE_A_HALFWIDTH, angle_0 + _PHASE_A_HALFWIDTH
 
-    def _neg_area(a):
+    def _neg_area_coarse(a):
         rot = shp_rotate(poly, -a, origin=centroid, use_radians=False)
-        _, area = _solve_axis_rect_grid(rot, grid_fine, max_ratio)
+        _, area = _solve_axis_rect_grid(rot, grid_coarse, max_ratio)
         return -area
 
     try:
-        res = minimize_scalar(_neg_area, bounds=(lo, hi), method='bounded',
+        res = minimize_scalar(_neg_area_coarse, bounds=(lo, hi),
+                              method='bounded',
                               options={'xatol': _PHASE_A_XATOL, 'maxiter': 60})
-        if res.fun < -candidate['area'] + 1e-10:
+        best_angle = float(res.x)
+        if abs(best_angle - angle_0) > 0.005:
             c = candidate.copy()
-            c['angle'] = float(res.x)
-            c['area']  = float(-res.fun)
+            c['angle'] = best_angle
+            c['area']  = float(-res.fun)   # coarse estimate; Stage 3 re-solves
             return c
     except Exception:
         pass
@@ -374,67 +386,129 @@ def _polish_angle(poly, candidate, grid_fine, max_ratio):
 
 
 def _rect_local_frame(rect):
+    """
+    Decompose a rotated rectangle into its local frame:
+    (cx, cy, ux, uy, vx, vy, a, b)
+    where (cx,cy) is center, (ux,uy) is the long-axis unit vector,
+    (vx,vy) is the short-axis unit vector, a = half long side, b = half short.
+    """
     coords = list(rect.exterior.coords)
-    if len(coords) < 5: return None
+    if len(coords) < 5:
+        return None
     p0 = np.array(coords[0][:2]); p1 = np.array(coords[1][:2])
     p2 = np.array(coords[2][:2])
-    e0 = p1 - p0; e1 = p2 - p1
-    l0 = float(np.linalg.norm(e0)); l1 = float(np.linalg.norm(e1))
-    if l0 < 1e-14 or l1 < 1e-14: return None
-    cx = float((p0[0] + p2[0]) / 2); cy = float((p0[1] + p2[1]) / 2)
+    e0 = p1 - p0;  e1 = p2 - p1
+    l0 = float(np.linalg.norm(e0));  l1 = float(np.linalg.norm(e1))
+    if l0 < 1e-14 or l1 < 1e-14:
+        return None
+    cx = float((p0[0] + p2[0]) / 2);  cy = float((p0[1] + p2[1]) / 2)
     if l0 >= l1:
-        ux, uy = e0[0]/l0, e0[1]/l0; vx, vy = e1[0]/l1, e1[1]/l1; a, b = l0/2, l1/2
+        ux, uy = e0[0] / l0, e0[1] / l0
+        vx, vy = e1[0] / l1, e1[1] / l1
+        a, b   = l0 / 2, l1 / 2
     else:
-        ux, uy = e1[0]/l1, e1[1]/l1; vx, vy = e0[0]/l0, e0[1]/l0; a, b = l1/2, l0/2
+        ux, uy = e1[0] / l1, e1[1] / l1
+        vx, vy = e0[0] / l0, e0[1] / l0
+        a, b   = l1 / 2, l0 / 2
     return cx, cy, ux, uy, vx, vy, a, b
 
 
 def _build_rect_from_frame(cx, cy, ux, uy, vx, vy, a, b):
-    corners = [(cx+a*ux+b*vx, cy+a*uy+b*vy),
-               (cx-a*ux+b*vx, cy-a*uy+b*vy),
-               (cx-a*ux-b*vx, cy-a*uy-b*vy),
-               (cx+a*ux-b*vx, cy+a*uy-b*vy)]
+    corners = [
+        (cx + a*ux + b*vx, cy + a*uy + b*vy),
+        (cx - a*ux + b*vx, cy - a*uy + b*vy),
+        (cx - a*ux - b*vx, cy - a*uy - b*vy),
+        (cx + a*ux - b*vx, cy + a*uy - b*vy),
+    ]
     return Polygon(corners + [corners[0]])
 
 
-def _certify_and_adjust(poly, rect, max_ratio, buf_enabled, buf_value):
+def _certify_and_adjust(poly: Polygon, rect,
+                         max_ratio: float,
+                         buf_enabled: bool, buf_value: float,
+                         prepared_poly=None):
     """
-    Phase C: guarantee containment, optionally apply user buffer.
-    Returns (rect, area) or (None, 0.0).
-    """
-    if rect is None or rect.is_empty: return None, 0.0
-    prep = shp_prep(poly)
+    Stage 4: guarantee containment and optionally apply user buffer.
 
-    if prep.covers(rect):
+    Containment strategy
+    ────────────────────
+    1. Fast path — prep.covers(rect): O(1) GEOS prepared-geometry check.
+       Done immediately if the rectangle already lies inside the polygon.
+
+    2. Corner-distance sweep — for each of the 4 exterior corners that lies
+       outside the polygon, measure its distance to the nearest polygon
+       boundary (exterior ring and any hole ring where the corner falls
+       inside the hole).  max_ov = maximum of these distances.
+       This handles the common case where grid snap or rotation drift
+       pushes one or two corners slightly outside.
+
+    3. Interior-crossing fallback (secondary; rare) — called ONLY when all
+       4 corners pass the prep.covers() point test but the full covers(rect)
+       still fails.  This means a concave polygon boundary cuts through the
+       rectangle interior without intersecting any corner.  In this case
+       rect.difference(poly) computes the exact overflow geometry and
+       sqrt(overflow.area) provides a tighter shrink proxy than the
+       bounding-box half-dimension used in earlier versions.
+
+    4. Symmetric shrink of max_ov + _CERT_EPS in the local rectangle frame.
+       Rejects (returns None) if the required shrink exceeds _CERT_MAX_SHRINK
+       fraction of the shorter side (catastrophic overflow → fallback path).
+
+    5. User buffer applied last (positive = expand, negative = shrink).
+
+    Returns (certified_rect, area) or (None, 0.0).
+    """
+    if rect is None or rect.is_empty:
+        return None, 0.0
+    prep = prepared_poly if prepared_poly is not None else shp_prep(poly)
+
+    # 1. Fast path
+    if _covers(poly, rect, prep):
         final = rect
     else:
         frame = _rect_local_frame(rect)
-        if frame is None: return None, 0.0
+        if frame is None:
+            return None, 0.0
         cx, cy, ux, uy, vx, vy, a, b = frame
 
-        # Measure overflow at all corners (and interior holes)
+        # 2. Corner-distance sweep
         max_ov = 0.0
         for corner in list(rect.exterior.coords)[:-1]:
             pt = Point(corner)
-            if not prep.contains(pt):
+            if not prep.covers(pt):
                 d = poly.exterior.distance(pt)
                 for interior in poly.interiors:
-                    ip = Polygon(interior)
-                    if ip.contains(pt): d = max(d, ip.exterior.distance(pt))
+                    ip_poly = Polygon(interior)
+                    if ip_poly.covers(pt):
+                        d = max(d, ip_poly.exterior.distance(pt))
                 max_ov = max(max_ov, d)
 
+        # 3. Interior-crossing fallback
+        if max_ov < _CERT_EPS:
+            try:
+                overflow_geom = rect.difference(poly)
+                if not overflow_geom.is_empty and overflow_geom.area > 1e-14:
+                    # sqrt(area) is a tighter geometric proxy than bbox half-dim
+                    max_ov = math.sqrt(overflow_geom.area) + _CERT_EPS
+            except Exception:
+                max_ov = _CERT_EPS
+
+        # 4. Symmetric shrink
         shrink = max_ov + _CERT_EPS
         if shrink > min(a, b) * _CERT_MAX_SHRINK:
             return None, 0.0
 
-        new_a = a - shrink; new_b = b - shrink
-        if new_a <= 0 or new_b <= 0: return None, 0.0
-        if max_ratio > 0.0 and new_b > 0 and new_a/new_b > max_ratio:
+        new_a = a - shrink;  new_b = b - shrink
+        if new_a <= 0 or new_b <= 0:
+            return None, 0.0
+        if max_ratio > 0.0 and new_b > 0 and new_a / new_b > max_ratio:
             new_a = new_b * max_ratio
 
         final = _build_rect_from_frame(cx, cy, ux, uy, vx, vy, new_a, new_b)
-        if not poly.covers(final): return None, 0.0
+        if not _covers(poly, final, prep):
+            return None, 0.0
 
+    # 5. Optional user buffer
     if buf_enabled and buf_value != 0.0:
         cand = final.buffer(buf_value, cap_style=3, join_style=2)
         if not cand.is_empty and cand.area > 0:
@@ -442,11 +516,15 @@ def _certify_and_adjust(poly, rect, max_ratio, buf_enabled, buf_value):
 
     return final, float(final.area)
 
-def _conservative_inner_fallback(poly, grid_fine, max_ratio, centroid, angles):
-    best_rect = None
-    best_area = 0.0
-    best_angle = None
 
+def _conservative_inner_fallback(poly, grid_fine, max_ratio,
+                                  centroid, angles, prepared_poly=None):
+    """
+    Fallback solver: progressively inset the polygon boundary and solve
+    inside the inset.  Guarantees containment at the cost of some area.
+    Used only when all top-K candidates fail certification.
+    """
+    best_rect = None; best_area = 0.0; best_angle = None
     minx, miny, maxx, maxy = poly.bounds
     span = max(maxx - minx, maxy - miny)
     if span <= 0:
@@ -456,147 +534,136 @@ def _conservative_inner_fallback(poly, grid_fine, max_ratio, centroid, angles):
         inner = poly.buffer(-span * frac, cap_style=3, join_style=2)
         if inner.is_empty or inner.area <= 0:
             continue
-
         if isinstance(inner, MultiPolygon):
             inner = max(inner.geoms, key=lambda g: g.area)
-
         if not isinstance(inner, Polygon) or inner.is_empty:
             continue
-
         for angle in angles:
             rot = shp_rotate(inner, -angle, origin=centroid, use_radians=False)
             rect_rot, area = _solve_axis_rect_grid(rot, grid_fine, max_ratio)
             if rect_rot is None or area <= best_area:
                 continue
             rect_world = shp_rotate(rect_rot, angle, origin=centroid, use_radians=False)
-            if poly.covers(rect_world):
-                best_rect = rect_world
-                best_area = float(rect_world.area)
+            if _covers(poly, rect_world, prepared_poly):
+                best_rect  = rect_world
+                best_area  = float(rect_world.area)
                 best_angle = angle
-
         if best_rect is not None:
             return best_rect, best_area, best_angle
 
     return None, 0.0, None
 
-def _best_effort_shrink_to_cover(poly, rect, max_ratio, tol=1e-7, max_iter=40):
+
+def _best_effort_shrink_to_cover(poly, rect, max_ratio,
+                                  tol=1e-7, max_iter=40, prepared_poly=None):
     """
-    Symmetrically shrink a rectangle in its local frame until poly.covers(rect).
-    Returns (rect, area) or (None, 0.0).
+    Binary-search the largest uniform scale s ∈ (0, 1] such that
+    poly.covers(scale_rect(rect, s)).  Used when _certify_and_adjust
+    rejects a candidate (overflow > 20% of shorter side).
+    The binary search converges to tol = 1e-7 relative scale, which for a
+    10 m rectangle corresponds to a 1 µm precision — sub-grid resolution.
     """
     if rect is None or rect.is_empty:
         return None, 0.0
-
     frame = _rect_local_frame(rect)
     if frame is None:
         return None, 0.0
-
     cx, cy, ux, uy, vx, vy, a0, b0 = frame
     if a0 <= 0 or b0 <= 0:
         return None, 0.0
 
     def build(scale):
-        a = a0 * scale
-        b = b0 * scale
+        a = a0 * scale; b = b0 * scale
         if a <= 0 or b <= 0:
             return None
         if max_ratio > 0.0:
-            long_s = max(a, b)
-            short_s = min(a, b)
-            if short_s <= 0:
-                return None
-            if long_s / short_s > max_ratio:
-                if a >= b:
-                    a = b * max_ratio
-                else:
-                    b = a * max_ratio
+            if max(a, b) / min(a, b) > max_ratio:
+                if a >= b: a = b * max_ratio
+                else:      b = a * max_ratio
         return _build_rect_from_frame(cx, cy, ux, uy, vx, vy, a, b)
 
-    # Full size already valid
     r1 = build(1.0)
-    if r1 is not None and poly.covers(r1):
+    if r1 is not None and _covers(poly, r1, prepared_poly):
         return r1, float(r1.area)
 
-    # Find any valid lower bound
-    lo, hi = 0.0, 1.0
-    r_lo = None
+    lo = 0.0; r_lo = None
     for s in (0.95, 0.9, 0.8, 0.65, 0.5, 0.35, 0.2, 0.1, 0.05, 0.02, 0.01):
         r = build(s)
-        if r is not None and poly.covers(r):
-            lo = s
-            r_lo = r
-            break
+        if r is not None and _covers(poly, r, prepared_poly):
+            lo = s; r_lo = r; break
 
     if r_lo is None:
         return None, 0.0
 
-    # Binary search largest valid scale
-    best_r = r_lo
-    best_a = float(r_lo.area)
-
+    hi = 1.0; best_r = r_lo; best_a = float(r_lo.area)
     for _ in range(max_iter):
-        mid = 0.5 * (lo + hi)
         if hi - lo < tol:
             break
-        r = build(mid)
-        if r is not None and poly.covers(r):
-            lo = mid
-            best_r = r
-            best_a = float(r.area)
+        mid = 0.5 * (lo + hi)
+        r   = build(mid)
+        if r is not None and _covers(poly, r, prepared_poly):
+            lo = mid; best_r = r; best_a = float(r.area)
         else:
             hi = mid
 
     return best_r, best_a
 
 
-def _refine_best_candidate(poly, candidates, grid_fine, max_ratio,
-                            buf_enabled, buf_value, always_return):
-    """Full Stage 2 pipeline: A+B+C per candidate, return best certified."""
-    certified = []
+# ==========================================================================
+# ⑥ STAGE 2 ORCHESTRATOR
+#    Runs Stage 2 → 3 → 4 for each Stage 1 candidate and returns the
+#    highest-area certified rectangle.
+# ==========================================================================
+def _refine_best_candidate(poly: Polygon,
+                            candidates: list,
+                            grid_coarse: int,
+                            grid_fine: int,
+                            max_ratio: float,
+                            buf_enabled: bool,
+                            buf_value: float,
+                            always_return: bool,
+                            prepared_poly=None):
+    """Full Stage 2 pipeline.  Returns 7-tuple or None."""
+    certified     = []
     fallback_best = None
 
     for rank, cand in enumerate(candidates):
-        area_s1 = cand['area']
+        area_s1  = cand['area']
         centroid = Point(cand['center'])
-        angle_0 = cand['angle']
 
-        rot0 = shp_rotate(poly, -angle_0, origin=centroid, use_radians=False)
-        rect0_rot, area0 = _solve_axis_rect_grid(rot0, grid_fine, max_ratio)
-        if rect0_rot is None or area0 <= 0:
+        # Stage 2: Brent angle polish (coarse grid only)
+        cand_a     = _polish_angle(poly, cand, grid_coarse, max_ratio)
+        angle_work = cand_a['angle']
+
+        # Stage 3: definitive fine-grid solve at polished angle
+        rot_work          = shp_rotate(poly, -angle_work,
+                                       origin=centroid, use_radians=False)
+        rect_rot, area_work = _solve_axis_rect_grid(rot_work, grid_fine, max_ratio)
+
+        if rect_rot is None or area_work <= 0:
             continue
-        rect0_world = shp_rotate(rect0_rot, angle_0, origin=centroid, use_radians=False)
 
-        best_raw_r = rect0_world
-        best_raw_a = float(area0)
-        best_raw_ang = angle_0
-
-        cand_a = _polish_angle(poly, cand, grid_fine, max_ratio)
-        if cand_a['angle'] != angle_0:
-            angle_a = cand_a['angle']
-            rot_a = shp_rotate(poly, -angle_a, origin=centroid, use_radians=False)
-            rect_a_rot, area_a = _solve_axis_rect_grid(rot_a, grid_fine, max_ratio)
-            if rect_a_rot is not None and area_a > best_raw_a:
-                rect_a_world = shp_rotate(rect_a_rot, angle_a, origin=centroid, use_radians=False)
-                best_raw_r = rect_a_world
-                best_raw_a = float(area_a)
-                best_raw_ang = angle_a
-
-        if best_raw_r is None:
-            continue
+        best_raw_r   = shp_rotate(rect_rot, angle_work,
+                                   origin=centroid, use_radians=False)
+        best_raw_a   = float(area_work)
+        best_raw_ang = angle_work
 
         if fallback_best is None or best_raw_a > fallback_best['area']:
             fallback_best = {
-                'rect': best_raw_r,
-                'area': best_raw_a,
+                'rect':  best_raw_r,
+                'area':  best_raw_a,
                 'angle': best_raw_ang,
-                'rank': rank,
+                'rank':  rank,
             }
 
-        best_r, best_a = _certify_and_adjust(poly, best_raw_r, max_ratio, False, 0.0)
+        # Stage 4: containment certification
+        best_r, best_a = _certify_and_adjust(
+            poly, best_raw_r, max_ratio, False, 0.0, prepared_poly)
         used_best_effort = False
 
         if best_r is None and always_return:
-            best_r, best_a = _best_effort_shrink_to_cover(poly, best_raw_r, max_ratio)
+            best_r, best_a = _best_effort_shrink_to_cover(
+                poly, best_raw_r, max_ratio, prepared_poly=prepared_poly)
             used_best_effort = best_r is not None
 
         if best_r is None:
@@ -609,43 +676,48 @@ def _refine_best_candidate(poly, candidates, grid_fine, max_ratio,
                 best_a = float(best_r.area)
 
         coords = list(best_r.exterior.coords)
-        w = math.hypot(coords[1][0] - coords[0][0], coords[1][1] - coords[0][1])
-        h = math.hypot(coords[2][0] - coords[1][0], coords[2][1] - coords[1][1])
+        w = math.hypot(coords[1][0]-coords[0][0], coords[1][1]-coords[0][1])
+        h = math.hypot(coords[2][0]-coords[1][0], coords[2][1]-coords[1][1])
         ratio = max(w, h) / min(w, h) if min(w, h) > 0 else 1.0
 
         certified.append({
-            'rect': best_r,
-            'area': best_a,
-            'angle': best_raw_ang,
-            'ratio': ratio,
-            'rank': rank,
-            'stage2_gain': best_a - area_s1,
+            'rect':             best_r,
+            'area':             best_a,
+            'angle':            best_raw_ang,
+            'ratio':            ratio,
+            'rank':             rank,
+            'stage2_gain':      best_a - area_s1,
             'used_best_effort': used_best_effort,
         })
 
     if not certified:
-        if always_return and fallback_best is not None and fallback_best['rect'] is not None:
-            rect_fb, area_fb = _best_effort_shrink_to_cover(poly, fallback_best['rect'], max_ratio)
+        if always_return and fallback_best is not None:
+            rect_fb, area_fb = _best_effort_shrink_to_cover(
+                poly, fallback_best['rect'], max_ratio,
+                prepared_poly=prepared_poly)
             if rect_fb is not None:
                 angle_fb = fallback_best['angle']
-                rank_fb = fallback_best['rank']
-                coords = list(rect_fb.exterior.coords)
-                w = math.hypot(coords[1][0] - coords[0][0], coords[1][1] - coords[0][1])
-                h = math.hypot(coords[2][0] - coords[1][0], coords[2][1] - coords[1][1])
+                rank_fb  = fallback_best['rank']
+                coords   = list(rect_fb.exterior.coords)
+                w = math.hypot(coords[1][0]-coords[0][0], coords[1][1]-coords[0][1])
+                h = math.hypot(coords[2][0]-coords[1][0], coords[2][1]-coords[1][1])
                 ratio_fb = max(w, h) / min(w, h) if min(w, h) > 0 else 1.0
-                return (rect_fb, area_fb, angle_fb, ratio_fb, rank_fb, area_fb, True)
+                return (rect_fb, area_fb, angle_fb, ratio_fb,
+                        rank_fb, area_fb, True)
 
-            centroid = Point(candidates[0]['center'])
-            rescue_angles = [c['angle'] for c in candidates[:max(3, min(len(candidates), 8))]]
+            centroid_fb = Point(candidates[0]['center'])
+            rescue_angs = [c['angle']
+                           for c in candidates[:max(3, min(len(candidates), 8))]]
             rect_c, area_c, angle_c = _conservative_inner_fallback(
-                poly, grid_fine, max_ratio, centroid, rescue_angles
-            )
+                poly, grid_fine, max_ratio, centroid_fb,
+                rescue_angs, prepared_poly)
             if rect_c is not None:
                 coords = list(rect_c.exterior.coords)
-                w = math.hypot(coords[1][0] - coords[0][0], coords[1][1] - coords[0][1])
-                h = math.hypot(coords[2][0] - coords[1][0], coords[2][1] - coords[1][1])
+                w = math.hypot(coords[1][0]-coords[0][0], coords[1][1]-coords[0][1])
+                h = math.hypot(coords[2][0]-coords[1][0], coords[2][1]-coords[1][1])
                 ratio_c = max(w, h) / min(w, h) if min(w, h) > 0 else 1.0
-                return (rect_c, area_c, angle_c, ratio_c, fallback_best['rank'], area_c, True)
+                return (rect_c, area_c, angle_c, ratio_c,
+                        fallback_best['rank'], area_c, True)
 
         return None
 
@@ -654,90 +726,105 @@ def _refine_best_candidate(poly, candidates, grid_fine, max_ratio,
             best['ratio'], best['rank'], best['stage2_gain'],
             best['used_best_effort'])
 
+
 # ==========================================================================
-# ⑥ GEOMETRY PREPARATION
+# ⑦ GEOMETRY PREPARATION
 # ==========================================================================
 def _prepare_polygon(geom):
     from shapely.validation import make_valid
 
     if geom is None or geom.is_empty:
         return None
-
     if not geom.is_valid:
         geom = make_valid(geom)
 
     if isinstance(geom, MultiPolygon):
-        polys = [g for g in geom.geoms if isinstance(g, Polygon) and not g.is_empty and g.area > 0]
+        polys = [g for g in geom.geoms
+                 if isinstance(g, Polygon) and not g.is_empty and g.area > 0]
         if not polys:
             return None
         geom = max(polys, key=lambda g: g.area)
-
-    elif hasattr(geom, "geoms") and not isinstance(geom, Polygon):
-        polys = [g for g in geom.geoms if isinstance(g, Polygon) and not g.is_empty and g.area > 0]
+    elif hasattr(geom, 'geoms') and not isinstance(geom, Polygon):
+        polys = [g for g in geom.geoms
+                 if isinstance(g, Polygon) and not g.is_empty and g.area > 0]
         if not polys:
             return None
         geom = max(polys, key=lambda g: g.area)
 
     if not isinstance(geom, Polygon) or geom.is_empty or geom.area <= 0:
         return None
-
     return geom
 
 
 # ==========================================================================
-# ⑦ MODULE-LEVEL MULTIPROCESSING ENTRY POINT
+# ⑧ MODULE-LEVEL MULTIPROCESSING ENTRY POINT
 # ==========================================================================
 def _worker_process_feature(args):
     """
-    Stateless worker function — safe for multiprocessing.Pool.
+    Stateless worker — safe for ThreadPoolExecutor and ProcessPoolExecutor.
 
     Parameters
     ----------
     args : tuple
-    (feat_id, wkb_bytes, angle_step, grid_coarse, grid_fine,
-     max_ratio, buf_enabled, buf_value, top_k, always_return)
+        (feat_id, wkb_bytes, angle_step, grid_coarse, grid_fine,
+         max_ratio, buf_enabled, buf_value, top_k, always_return)
 
     Returns
     -------
-tuple or None
-    (feat_id, wkt, area, angle_deg, ratio, cand_rank, stage2_gain, used_best_effort)
+    tuple or None
+        (feat_id, wkt, area, angle_deg, ratio,
+         cand_rank, stage2_gain, used_best_effort)
     """
     (feat_id, wkb_bytes, angle_step, grid_coarse, grid_fine,
      max_ratio, buf_enabled, buf_value, top_k, always_return) = args
+
     try:
         poly = _prepare_polygon(wkb_loads(bytes(wkb_bytes)))
+        if poly is None:
+            return None
+
+        # Precision normalisation (Shapely ≥ 2.x) — snaps near-coincident
+        # vertices to a sub-nanometre grid, preventing degenerate GEOS results.
         try:
             from shapely import set_precision
             minx, miny, maxx, maxy = poly.bounds
             span = max(maxx - minx, maxy - miny)
             if span > 0:
-                poly = set_precision(poly, grid_size=span * 1e-9, mode="valid_output")
+                poly = set_precision(poly,
+                                     grid_size=span * 1e-9,
+                                     mode='valid_output')
         except Exception:
             pass
-        if poly is None:
+
+        if poly is None or poly.is_empty:
             return None
+
+        prepared_poly = _make_prepared(poly)
+
         candidates = _heuristic_candidates(
             poly, angle_step, grid_coarse, grid_fine, max_ratio, top_k)
         if not candidates:
             return None
+
         result = _refine_best_candidate(
-            poly, candidates, grid_fine, max_ratio, buf_enabled, buf_value, always_return
-        )
+            poly, candidates, grid_coarse, grid_fine,
+            max_ratio, buf_enabled, buf_value, always_return,
+            prepared_poly=prepared_poly)
 
         if result is None:
             return None
 
         rect, area, angle, ratio, rank, gain, used_best_effort = result
-
         return (
             feat_id,
             rect.wkt,
-            round(float(area), 4),
+            round(float(area),  4),
             round(float(angle), 4),
             round(float(ratio), 4),
             int(rank),
-            round(float(gain), 6),
+            round(float(gain),  6),
             int(used_best_effort),
         )
     except Exception as e:
-        raise RuntimeError(f"_worker_process_feature failed for feat_id={feat_id}: {e}") from e
+        raise RuntimeError(
+            f'_worker_process_feature failed for feat_id={feat_id}: {e}') from e

@@ -814,16 +814,16 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
     """
     certified     = []
     fallback_best = None
-    phase_a_cache = {}
+    stage3_cache = {}
 
     for rank, cand in enumerate(candidates):
         area_s1    = cand['area']
         centroid   = Point(cand['center'])
         orig_angle = cand['angle']   # exact Stage-1 edge direction
 
-        # Phase A: Brent polish (coarse grid)
+        # Stage 3: Brent polish (coarse grid)
         cand_a      = _polish_angle(
-            poly, cand, grid_coarse, max_ratio, area_cache=phase_a_cache
+            poly, cand, grid_coarse, max_ratio, area_cache=stage3_cache
         )
         brent_angle = cand_a['angle']
 
@@ -909,7 +909,7 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
                 'rank':  rank,
             }
 
-        # Phase C: certification
+        # Stage 6: certification
         best_r, best_a = _certify_and_adjust(
             poly, best_raw_r, max_ratio, False, 0.0, prepared_poly)
         used_best_effort = False

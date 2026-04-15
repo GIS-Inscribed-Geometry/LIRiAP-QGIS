@@ -32,9 +32,21 @@ script_dir = os.path.dirname(__file__)
 if script_dir not in sys.path:
     sys.path.append(script_dir)
 
-from approximation_fast_worker import process_slice, _NUMBA_AVAILABLE
+from approximation_fast_worker import _worker_process_feature, _NUMBA_AVAILABLE
 from help_descriptions import build_short_help
 from numba_bootstrap import ensure_numba
+
+
+def _process_slice(job_array, start, end, shared_params):
+    out = {}
+    for i in range(start, end):
+        feat_id, wkb_bytes = job_array[i]
+        res = _worker_process_feature((feat_id, wkb_bytes, *shared_params))
+        if res is None:
+            continue
+        _, wkt, area, angle, ratio = res
+        out[feat_id] = (wkt, area, angle, ratio)
+    return out
 
 
 class InscribedRectangleApproximationFast(QgsProcessingAlgorithm):
@@ -145,10 +157,13 @@ class InscribedRectangleApproximationFast(QgsProcessingAlgorithm):
         results = {}
         if not use_parallel or n_workers == 1:
             done = 0
-            for i in range(total):
+            for feat_id, wkb_bytes in job_array:
                 if feedback.isCanceled():
                     return {self.OUTPUT: dest_id}
-                results.update(process_slice(job_array, i, i + 1, *shared_params))
+                res = _worker_process_feature((feat_id, wkb_bytes, *shared_params))
+                if res is not None:
+                    _, wkt, area, angle, ratio = res
+                    results[feat_id] = (wkt, area, angle, ratio)
                 done += 1
                 feedback.setProgress(int(done / total * 100))
         elif use_chunking:
@@ -163,7 +178,7 @@ class InscribedRectangleApproximationFast(QgsProcessingAlgorithm):
                     idx += size
             with _cf.ThreadPoolExecutor(max_workers=n_workers) as exe:
                 future_to_size = {
-                    exe.submit(process_slice, job_array, s, e, *shared_params): (e - s)
+                    exe.submit(_process_slice, job_array, s, e, shared_params): (e - s)
                     for s, e in slices
                 }
                 done = 0
@@ -178,15 +193,18 @@ class InscribedRectangleApproximationFast(QgsProcessingAlgorithm):
         else:
             with _cf.ThreadPoolExecutor(max_workers=n_workers) as exe:
                 futures = {
-                    exe.submit(process_slice, job_array, i, i + 1, *shared_params): i
-                    for i in range(total)
+                    exe.submit(_worker_process_feature, (fid, wkb, *shared_params)): fid
+                    for fid, wkb in job_array
                 }
                 done = 0
                 for fut in _cf.as_completed(futures):
                     if feedback.isCanceled():
                         exe.shutdown(wait=False, cancel_futures=True)
                         return {self.OUTPUT: dest_id}
-                    results.update(fut.result())
+                    res = fut.result()
+                    if res is not None:
+                        fid, wkt, area, angle, ratio = res
+                        results[fid] = (wkt, area, angle, ratio)
                     done += 1
                     feedback.setProgress(int(done / total * 100))
 

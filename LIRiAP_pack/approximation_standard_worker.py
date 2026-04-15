@@ -2,6 +2,12 @@
 LIRiAP Approximation Standard worker module.
 
 Pure geometry routines used by the QGIS algorithm wrapper. No QGIS/Qt imports.
+
+Stage model (consistent with README):
+1. Edge-guided coarse candidate search.
+2. Local angle polishing around top candidates.
+3. Fine-grid solve at the best angle neighborhood.
+4. Optional output buffer application.
 """
 
 import numpy as np
@@ -234,7 +240,7 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
     best_rect   = None
     best_angle  = 0.0
 
-    # ── Phase 1: edge-guided candidates ─────────────────────────────────────
+    # ── Stage 1: edge-guided candidates ─────────────────────────────────────
     candidates = _edge_candidate_angles(shapely_poly)
 
     if len(candidates) >= 2:
@@ -243,7 +249,7 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
     else:
         half_window = 10.0
 
-    # ── Phase 2a: coarse-grid evaluation with early rejection ────────────────
+    # ── Stage 2: coarse-grid evaluation with early rejection ─────────────────
     # Sort candidates by descending upper-bound so the global best rises fast,
     # maximising pruning efficiency in the early-rejection test.
     bounds   = [(a, _upper_bound(shapely_poly, a, max_ratio))
@@ -264,7 +270,7 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
             best_rect  = rect
             best_angle = float(angle)
 
-    # ── Phase 2b: fallback uniform sweep for isotropic/featureless polygons ──
+    # ── Stage 2: fallback uniform sweep for isotropic/featureless polygons ───
     if best_rect is None or len(candidates) <= 4:
         for angle in range(0, 180, angle_step):
             a  = float(angle % 90)
@@ -282,7 +288,7 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
     if best_rect is None:
         return None
 
-    # ── Phase 3: narrow continuous refinement around best_angle ─────────────
+    # ── Stage 3: narrow continuous refinement around best_angle ─────────────
     def _neg_area_fine(a):
         rp = rotate(shapely_poly, -a, origin=centroid, use_radians=False)
         _, area = _solve_axis_rect(rp, grid_steps_fine, max_ratio)
@@ -308,7 +314,7 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
     final_rect = rotate(best_rect, best_angle,
                         origin=centroid, use_radians=False)
 
-    # ── Phase 4: optional containment buffer ─────────────────────────────────
+    # ── Stage 4: optional containment buffer ─────────────────────────────────
     if buf_enabled and buf_value != 0.0:
         candidate = final_rect.buffer(buf_value, cap_style=3, join_style=2)
         if not candidate.is_empty and candidate.area > 0:
