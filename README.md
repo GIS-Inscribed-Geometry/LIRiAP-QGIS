@@ -332,7 +332,7 @@ flowchart TD
 | $p$ | Brent objective evaluations (`maxiter=60` where explicitly set). |
 | $t$ | Stage 4-5 angle trials per candidate ($\le 4$ in BCRS, $\le 2$ in BCRS Fast). |
 | $X,Y$ | Unique boundary x/y coordinates after rotation (BCRS grid lines). |
-| $\nu$ | BCRS cell count: $\nu = (|X|-1)(|Y|-1)$. |
+| $\nu$ | BCRS cell count: $\nu = (\lvert X\rvert-1)(\lvert Y\rvert-1)$. |
 
 ### Primitive solver costs (from implementation loops)
 
@@ -345,7 +345,7 @@ flowchart TD
    $$
    T_{\text{bcrs}} = \Theta(n\log n + \nu), \quad M_{\text{bcrs}} = \Theta(n+\nu)
    $$
-   with implementation guard: if $|X|>300$ or $|Y|>300$, BCRS is skipped (seed fallback).
+   with implementation guard: if $\lvert X\rvert>300$ or $\lvert Y\rvert>300$, BCRS is skipped (seed fallback).
 
 3. CABF expansion (`_expand_rect_to_boundary`): bounded iteration counts, worst-case geometric predicate cost per check gives  
    $$
