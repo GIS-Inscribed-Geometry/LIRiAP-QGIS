@@ -320,19 +320,20 @@ flowchart TD
 
 ### Symbols used in all formulas
 
-| Symbol | Meaning |
-| --- | --- |
-| $n$ | Total polygon vertices (exterior + holes). |
-| $g_{coarse}$ | Coarse grid size (`GRID_COARSE`). |
-| $g_{fine}$ | Fine grid size (`GRID_FINE`). |
-| $k$ | Candidate count kept for refinement (`TOP_K`). |
-| $m$ | Edge-guided initial angle candidates ($\le 12$ in contained/BCRS, $\le 10$ in approximation). |
-| $s_{90}$ | Fallback sweep size: $s_{90}=\lceil 90/\text{ANGLE STEP}\rceil$. |
-| $s_{180}$ | Approximation fallback sweep size: $s_{180}=\lceil 180/\text{ANGLE STEP}\rceil$. |
-| $p$ | Brent objective evaluations (`maxiter=60` where explicitly set). |
-| $t$ | Stage 4-5 angle trials per candidate ($\le 4$ in BCRS, $\le 2$ in BCRS Fast). |
-| $X,Y$ | Unique boundary x/y coordinates after rotation (BCRS grid lines). |
-| $\nu$ | BCRS cell count: $\nu=(\lvert X\rvert-1)(\lvert Y\rvert-1)$. |
+
+| Symbol       | Meaning                                                                                       |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| $n$          | Total polygon vertices (exterior + holes).                                                    |
+| $g_{coarse}$ | Coarse grid size (`GRID_COARSE`).                                                             |
+| $g_{fine}$   | Fine grid size (`GRID_FINE`).                                                                 |
+| $k$          | Candidate count kept for refinement (`TOP_K`).                                                |
+| $m$          | Edge-guided initial angle candidates ($\le 12$ in contained/BCRS, $\le 10$ in approximation). |
+| $s_{90}$     | Fallback sweep size:$s_{90}=\lceil 90/\text{ANGLE STEP}\rceil$.                               |
+| $s_{180}$    | Approximation fallback sweep size:$s_{180}=\lceil 180/\text{ANGLE STEP}\rceil$.               |
+| $p$          | Brent objective evaluations (`maxiter=60` where explicitly set).                              |
+| $t$          | Stage 4-5 angle trials per candidate ($\le 4$ in BCRS, $\le 2$ in BCRS Fast).                 |
+| $X,Y$        | Unique boundary x/y coordinates after rotation (BCRS grid lines).                             |
+| $\nu$        | BCRS cell count:$\nu=(\lvert X\rvert-1)(\lvert Y\rvert-1)$.                                   |
 
 ### Primitive solver costs (from implementation loops)
 
@@ -368,23 +369,14 @@ T_{\text{feature}} = T_{\text{angles}} + T_{\text{stage1}} + T_{\text{refine}} +
 $$
 
 
-| Algorithm              | Worst-case time (single feature)                                                         | Memory                           |
-| ---------------------- | ---------------------------------------------------------------------------------------- | -------------------------------- |
-| Approximation Standard | $O\!\left(n + (m+s_{180})g_{coarse}^2 + (p+1)g_{fine}^2\right)$                         | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
-| Approximation Fast     | same geometric order as Approximation Standard (batch/slice execution changes constants) | same                             |
-| Contained Standard     | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left((p+2)g_{fine}^2 + n\right)\right)$      | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
-| Contained Fast         | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left(pg_{coarse}^2 + g_{fine}^2 + n\right)\right)$ | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
-| BCRS                   | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left(pg_{coarse}^2 + t(g_{fine}^2 + n\log n + \nu) + n\right)\right)$ | $O\!\left(\max(g_{fine}^2,\nu)\right)$ |
-| BCRS Fast              | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left((p+4)g_{coarse}^2 + t(n\log n + \nu) + n\right)\right),\ t\le2$ | $O\!\left(\max(g_{coarse}^2,\nu)\right)$ |
-
-### Big-O
-
-- Approximation Standard: $O\!\left(n + (m+s_{180})g_{coarse}^2 + p\,g_{fine}^2\right)$
-- Approximation Fast: $O\!\left(n + (m+s_{180})g_{coarse}^2 + p\,g_{fine}^2\right)$
-- Contained Standard: $O\!\left(n + (m+s_{90})g_{coarse}^2 + k(p\,g_{fine}^2 + n)\right)$
-- Contained Fast: $O\!\left(n + (m+s_{90})g_{coarse}^2 + k(p\,g_{coarse}^2 + g_{fine}^2 + n)\right)$
-- BCRS: $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left(p\,g_{coarse}^2 + t(g_{fine}^2 + n\log n + \nu) + n\right)\right)$
-- BCRS Fast: $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left((p+4)g_{coarse}^2 + t(n\log n + \nu) + n\right)\right)$
+| Algorithm              | Worst-case time (single feature)                                                                                 | Memory                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Approximation Standard | $O\!\left(n + (m+s_{180})g_{coarse}^2 + (p+1)g_{fine}^2\right)$                                                  | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
+| Approximation Fast     | same geometric order as Approximation Standard (batch/slice execution changes constants)                         | same                                            |
+| Contained Standard     | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left((p+2)g_{fine}^2 + n\right)\right)$                               | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
+| Contained Fast         | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left(pg_{coarse}^2 + g_{fine}^2 + n\right)\right)$                    | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
+| BCRS                   | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left(pg_{coarse}^2 + t(g_{fine}^2 + n\log n + \nu) + n\right)\right)$ | $O\!\left(\max(g_{fine}^2,\nu)\right)$          |
+| BCRS Fast              | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left((p+4)g_{coarse}^2 + t(n\log n + \nu) + n\right)\right),\ t\le2$  | $O\!\left(\max(g_{coarse}^2,\nu)\right)$        |
 
 ### Why Fast variants are faster (math-level deltas)
 
@@ -402,19 +394,19 @@ $$
 
 ### Default-parameter operation model (from algorithm defaults)
 
-Defaults: Approximation $g_{coarse}=40$, $g_{fine}=100$, `ANGLE_STEP` $=5$;  
-Contained/BCRS $g_{coarse}=40$, $g_{fine}=120$, $k=3$, `ANGLE_STEP` $=5$.  
+Defaults: Approximation $g_{coarse}=40$, $g_{fine}=100$, `ANGLE_STEP` $=5$;
+Contained/BCRS $g_{coarse}=40$, $g_{fine}=120$, $k=3$, `ANGLE_STEP` $=5$.
 Hence $s_{180}=36$, $s_{90}=18$, and $40^2=1600$, $100^2=10000$, $120^2=14400$.
 
 Using $p=60$, $t=4$ (BCRS standard), $m=10$ for Approximation, $m=12$ for Contained/BCRS, and $\nu \le 299\cdot299 = 89401$:
 
 
-| Algorithm                     | Dominant per-feature term estimate (worst-case style)                                             |
-| ----------------------------- | ------------------------------------------------------------------------------------------------- |
-| Approximation Standard / Fast | $(10+36)\cdot1600 + (60+1)\cdot10000 = 683600$ grid-units |
-| Contained Standard | $(12+18)\cdot1600 + 3\cdot(60+2)\cdot14400 = 2726400$ grid-units |
-| Contained Fast | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 14400) = 379200$ grid-units |
-| BCRS | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 4\cdot(14400 + 89401)) \approx 1587612$ plus certification/CABF geometry cost |
-| BCRS Fast | $(12+18)\cdot1600 + 3\cdot((60+4)\cdot1600 + 2\cdot89401) \approx 890406$ plus certification/CABF geometry cost |
+| Algorithm                     | Dominant per-feature term estimate (worst-case style)                                                                  |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Approximation Standard / Fast | $(10+36)\cdot1600 + (60+1)\cdot10000 = 683600$ grid-units                                                              |
+| Contained Standard            | $(12+18)\cdot1600 + 3\cdot(60+2)\cdot14400 = 2726400$ grid-units                                                       |
+| Contained Fast                | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 14400) = 379200$ grid-units                                                   |
+| BCRS                          | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 4\cdot(14400 + 89401)) \approx 1587612$ plus certification/CABF geometry cost |
+| BCRS Fast                     | $(12+18)\cdot1600 + 3\cdot((60+4)\cdot1600 + 2\cdot89401) \approx 890406$ plus certification/CABF geometry cost        |
 
 These are complexity-weighted operation counts, not wall-clock predictions.
