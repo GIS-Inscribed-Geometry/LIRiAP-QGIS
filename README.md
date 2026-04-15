@@ -337,28 +337,31 @@ flowchart TD
 
 ### Primitive solver costs (from implementation loops)
 
-1. Uniform grid solver (`_solve_axis_rect_grid` / `_solve_axis_rect`):
+**Uniform grid solver** (`_solve_axis_rect_grid` / `_solve_axis_rect`)
 
-   $$
-   T_{\text{grid}}(g) = \Theta(g^2), \quad M_{\text{grid}}(g) = \Theta(g^2)
-   $$
-2. BCRS variable-pitch solver (`_solve_axis_rect_bcrs`):
+$$
+T_{grid}(g) = \Theta(g^2), \quad M_{grid}(g) = \Theta(g^2)
+$$
 
-   $$
-   T_{\text{bcrs}} = \Theta(n\log n + \nu), \quad M_{\text{bcrs}} = \Theta(n+\nu)
-   $$
+**BCRS variable-pitch solver** (`_solve_axis_rect_bcrs`)
 
-   with implementation guard: if $\lvert X\rvert > 300$ or $\lvert Y\rvert > 300$, BCRS is skipped (seed fallback).
-3. CABF expansion (`_expand_rect_to_boundary`): bounded iteration counts, worst-case geometric predicate cost per check gives
+$$
+T_{bcrs} = \Theta(n\log n + \nu), \quad M_{bcrs} = \Theta(n+\nu)
+$$
 
-   $$
-   T_{\text{cabf}} = \Theta(n)
-   $$
-4. Certification + best-effort shrink (`_certify_and_adjust`, `_best_effort_shrink_to_cover`):
+Implementation guard: if $\lvert X\rvert > 300$ or $\lvert Y\rvert > 300$, BCRS is skipped (seed fallback).
 
-   $$
-   T_{\text{cert}} = \Theta(n), \quad T_{\text{shrink}} = \Theta(n)
-   $$
+**CABF expansion** (`_expand_rect_to_boundary`) — bounded iteration counts; worst-case geometric predicate cost model:
+
+$$
+T_{cabf} = \Theta(n)
+$$
+
+**Certification + best-effort shrink** (`_certify_and_adjust`, `_best_effort_shrink_to_cover`)
+
+$$
+T_{cert} = \Theta(n), \quad T_{shrink} = \Theta(n)
+$$
 
 ### Per-feature worst-case complexity by algorithm
 
