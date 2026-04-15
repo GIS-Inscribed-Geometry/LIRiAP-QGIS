@@ -12,7 +12,7 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 
 ## At a glance
 
-From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area (90%+ of max theoretically possible area 95%+ of the time). "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements.
+From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements.
 
 
 | Family        | Primary objective                            | Strict containment               | Boundary expansion |
