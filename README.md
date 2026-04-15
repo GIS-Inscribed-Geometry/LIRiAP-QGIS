@@ -4,17 +4,15 @@ LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Proces
 
 ## Problem statement
 
-Given an input polygon, find a large non axis aligned interior rectangle (concave polygons and polygons with holes supported).In this plugin, **three different problem variants** are implemented:
+Given an input polygon, find a large non axis aligned interior rectangle (concave polygons and polygons with holes supported). In this plugin, **three different problem variants** are implemented:
 
 1. **Approximation family**: maximize area quickly, without strict containment certification.
 2. **Contained family**: enforce containment certification, but do not run boundary expansion after certification.
 3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF). This is the only family in this plugin intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target.
 
----
-
 ## At a glance
 
-From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area (90%+ of max theoretically possible area 95%+ of the time). "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run.
+From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area (90%+ of max theoretically possible area 95%+ of the time). "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements.
 
 
 | Family        | Primary objective                            | Strict containment               | Boundary expansion |
@@ -22,6 +20,38 @@ From the fastest to slowest. BCRS without multhreaded processing is usually the 
 | Approximation | Fast area-focused search                     | No                               | No                 |
 | Contained     | Certified contained rectangle search         | Yes (unless fallback is enabled) | No                 |
 | BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (CABF)         |
+
+Best execution mode by algorithm (@290 @5406 are number of run features in a dataset):
+
+
+| Algorithm                     | Best mode @290 | Best mode @5406 |
+| ----------------------------- | -------------- | --------------- |
+| Approximation Standard        | 12w            | 12w+chunk       |
+| Approximation Fast            | 12w            | 12w+chunk       |
+| Contained Standard (strict)   | 12w+chunk      | 12w             |
+| Contained Standard (fallback) | 12w+chunk      | 12w+chunk       |
+| Contained Fast (fallback)     | 12w+chunk      | 12w+chunk       |
+| BCRS (strict)                 | 1w             | 1w              |
+| BCRS (fallback)               | 1w             | 1w              |
+| BCRS Fast (fallback)          | 1w             | 1w              |
+
+## Result screenshots
+
+### Approximation
+
+![Approximation result](media/Approximate.png)
+
+![Approximation (improved candidate)](media/Approximate_better.png)
+
+### Contained
+
+![Contained result](media/Contained.png)
+
+### BCRS
+
+![BCRS result](media/BCRS.png)
+
+![BCRS result (zoom)](media/BCRS_zoom.png)
 
 ---
 
@@ -149,6 +179,20 @@ Use these symbols per profile:
 
 ### Approximation Standard
 
+```mermaid
+flowchart TD
+    A[Prepare geometry] --> B[Edge-angle candidates]
+    B --> C[Upper-bound pruning]
+    C --> D[Coarse grid solve]
+    D --> E{Candidates weak/ambiguous?}
+    E -- Yes --> F[Fallback uniform sweep]
+    E -- No --> G[Angle refinement]
+    F --> G[Angle refinement]
+    G --> H[Fine-grid recompute]
+    H --> I[Rotate back + optional buffer]
+    I --> J[Output area/angle/ratio]
+```
+
 1. Prepare geometry and keep the largest polygon component for multipolygons.
 2. Generate orientation candidates from boundary edge directions.
 3. Compute a cheap area upper bound per angle and skip weak candidates early.
@@ -161,12 +205,33 @@ Use these symbols per profile:
 
 ### Approximation Fast
 
+```mermaid
+flowchart TD
+    A[Same geometry search as Approximation Standard] --> B[Slice-based execution]
+    B --> C[Per-slice worker solve]
+    C --> D[Merge slice outputs]
+    D --> E[Output area/angle/ratio]
+```
+
 1. Uses the same geometric search logic as Approximation Standard.
 2. Executes work as index slices (`process_slice`) to reduce per-feature overhead.
 3. Preserves identical output fields while improving throughput on larger batches.
 4. **Semantics**: identical to Approximation Standard.
 
 ### Contained Standard
+
+```mermaid
+flowchart TD
+    A[Stage 1: Edge-guided coarse top-K] --> B[Stage 2: Local angle polishing]
+    B --> C[Stage 3: Fine-grid solve]
+    C --> D[Stage 4: Containment certification]
+    D --> E{Strict certification passes?}
+    E -- Yes --> F[Optional user buffer + diagnostics]
+    E -- No --> G{ALWAYS_RETURN enabled?}
+    G -- Yes --> H[Best-effort shrink fallback]
+    G -- No --> I[No rectangle for feature]
+    H --> F
+```
 
 1. Stage 1: edge-guided coarse search produces top-K candidate angles.
 2. Stage 2: local angle polishing around each candidate.
@@ -178,12 +243,35 @@ Use these symbols per profile:
 
 ### Contained Fast
 
+```mermaid
+flowchart TD
+    A[Same Stage 1-4 geometry logic as Contained Standard] --> B[Optimized execution path]
+    B --> C[Chunk/slice parallel processing]
+    C --> D[Same certification/fallback semantics]
+    D --> E[Same diagnostics output]
+```
+
 1. Uses the same Stage 1-4 contained workflow as Contained Standard.
 2. Uses optimized execution and chunk/slice processing to scale over many features.
 3. Keeps containment guarantees and diagnostics behavior aligned with Standard.
 4. **Semantics**: identical to Contained Standard.
 
 ### BCRS (moderately novel method)
+
+```mermaid
+flowchart TD
+    A[Stage 1: Geometry preparation] --> B[Stage 2: Heuristic candidates]
+    B --> C[Stage 3: Angle refinement]
+    C --> D[Stage 4: BCRS boundary-coordinate solve]
+    D --> E[Stage 5: CABF expansion]
+    E --> F[Stage 6: Containment certification]
+    F --> G{Strict certification passes?}
+    G -- Yes --> H[Stage 7: Select best + output]
+    G -- No --> I{Fallback enabled?}
+    I -- Yes --> J[Best-effort certified fallback]
+    I -- No --> K[No rectangle for feature]
+    J --> H
+```
 
 1. **Stage 1 (geometry preparation)**: validate geometry, normalize multipart inputs, optional precision snapping.
 2. **Stage 2 (heuristic candidates)**:
@@ -206,6 +294,14 @@ Use these symbols per profile:
 8. **Semantics**: this is the only family here that combines contained certification with explicit boundary expansion (CABF), i.e. the full target formulation in this plugin.
 
 ### BCRS Fast
+
+```mermaid
+flowchart TD
+    A[Same BCRS Stage 1-7 geometry logic] --> B[Rank Stage 3 trial angles]
+    B --> C[Limit expensive Stage 4-5 runs]
+    C --> D[Reuse Stage 3 area cache/arrays]
+    D --> E[Same Stage 6 certification + Stage 7 output semantics]
+```
 
 1. Uses the same BCRS Stage 1-7 geometry logic.
 2. Adds trial ranking and limits expensive Stage 4-5 runs to strongest nearby angles.
