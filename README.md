@@ -362,21 +362,27 @@ flowchart TD
 
 ### Per-feature worst-case complexity by algorithm
 
-Pipeline composition:
+Pipeline composition (generic):
 
 $$
 T_{\text{feature}} = T_{\text{angles}} + T_{\text{stage1}} + T_{\text{refine}} + T_{\text{cert/fallback}}
 $$
 
+For BCRS-family algorithms, the explicit expansion stage is:
+
+$$
+T_{\text{feature,BCRS}} = T_{\text{angles}} + T_{\text{stage1}} + T_{\text{refine}} + T_{\text{expand}} + T_{\text{cert/fallback}}
+$$
+
 
 | Algorithm              | Worst-case time (single feature)                                                                                 | Memory                                          |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| Approximation Standard | $O\!\left(n + (m+s_{180})g_{coarse}^2 + (p+1)g_{fine}^2\right)$                                                  | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
+| Approximation Standard | $O\!\left(n + (m+s_{180})g_{coarse}^2 + (p+1)g_{fine}^2\right)$ (single refined candidate)                     | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
 | Approximation Fast     | same geometric order as Approximation Standard (batch/slice execution changes constants)                         | same                                            |
 | Contained Standard     | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left((p+2)g_{fine}^2 + n\right)\right)$                               | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
 | Contained Fast         | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left(pg_{coarse}^2 + g_{fine}^2 + n\right)\right)$                    | $O\!\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
-| BCRS                   | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left(pg_{coarse}^2 + t(g_{fine}^2 + n\log n + \nu) + n\right)\right)$ | $O\!\left(\max(g_{fine}^2,\nu)\right)$          |
-| BCRS Fast              | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left((p+4)g_{coarse}^2 + t(n\log n + \nu) + n\right)\right),\ t\le2$  | $O\!\left(\max(g_{coarse}^2,\nu)\right)$        |
+| BCRS                   | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left(pg_{coarse}^2 + t(g_{fine}^2 + n\log n + \nu + n) + n\right)\right)$ | $O\!\left(\max(g_{fine}^2,\nu)\right)$          |
+| BCRS Fast              | $O\!\left(n + (m+s_{90})g_{coarse}^2 + k\!\left((p+4)g_{coarse}^2 + t(n\log n + \nu + n) + n\right)\right),\ t\le2$  | $O\!\left(\max(g_{coarse}^2,\nu)\right)$        |
 
 ### Why Fast variants are faster (math-level deltas)
 
@@ -394,11 +400,13 @@ $$
 
 ### Default-parameter operation model (from algorithm defaults)
 
-Defaults: Approximation $g_{coarse}=40$, $g_{fine}=100$, `ANGLE_STEP` $=5$;
-Contained/BCRS $g_{coarse}=40$, $g_{fine}=120$, $k=3$, `ANGLE_STEP` $=5$.
+Defaults used for this calculation:
+- Approximation family: $g_{coarse}=40$, $g_{fine}=100$, single refined candidate ($k=1$ effective), `ANGLE_STEP` $=5$.
+- Contained/BCRS families: $g_{coarse}=40$, $g_{fine}=120$, $k=3$, `ANGLE_STEP` $=5$.
+
 Hence $s_{180}=36$, $s_{90}=18$, and $40^2=1600$, $100^2=10000$, $120^2=14400$.
 
-Using $p=60$, $t=4$ (BCRS standard), $m=10$ for Approximation, $m=12$ for Contained/BCRS, and $\nu \le 299\cdot299 = 89401$:
+Using $p=60$, $k=1$ effective for Approximation, $k=3$ for Contained/BCRS, $t\le 4$ for BCRS standard (up to 4 trial angles after de-duplication), $m=10$ for Approximation, $m=12$ for Contained/BCRS, and $\nu \le 299\cdot299 = 89401$:
 
 
 | Algorithm                     | Dominant per-feature term estimate (worst-case style)                                                                  |
@@ -406,7 +414,29 @@ Using $p=60$, $t=4$ (BCRS standard), $m=10$ for Approximation, $m=12$ for Contai
 | Approximation Standard / Fast | $(10+36)\cdot1600 + (60+1)\cdot10000 = 683600$ grid-units                                                              |
 | Contained Standard            | $(12+18)\cdot1600 + 3\cdot(60+2)\cdot14400 = 2726400$ grid-units                                                       |
 | Contained Fast                | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 14400) = 379200$ grid-units                                                   |
-| BCRS                          | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 4\cdot(14400 + 89401)) \approx 1587612$ plus certification/CABF geometry cost |
-| BCRS Fast                     | $(12+18)\cdot1600 + 3\cdot((60+4)\cdot1600 + 2\cdot89401) \approx 890406$ plus certification/CABF geometry cost        |
+| BCRS                          | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 4\cdot(14400 + 89401)) \approx 1581612$ plus certification/CABF geometry cost |
+| BCRS Fast                     | $(12+18)\cdot1600 + 3\cdot((60+4)\cdot1600 + 2\cdot89401) \approx 891606$ plus certification/CABF geometry cost        |
 
 These are complexity-weighted operation counts, not wall-clock predictions.
+
+### Verification test: expected relations vs wall-clock times
+
+Using baseline 5406-feature wall times (`N_WORKERS=1`, no chunking):
+
+| Relation check | Model expectation | Measured times | Result |
+| --- | --- | --- | --- |
+| Approximation Fast vs Standard | nearly equal (same asymptotic order) | $125.93s$ vs $127.25s$ | consistent |
+| Contained Fast vs Standard | Fast should be lower | $226.05s < 574.13s$ | consistent |
+| BCRS Fast vs BCRS | Fast should be lower | $445.01s < 772.05s$ | consistent |
+| Approximation Standard vs Contained Fast | model estimate favors Contained Fast | $127.25s < 226.05s$ | mismatch |
+| Contained Standard vs BCRS | model estimate favors BCRS | $574.13s < 772.05s$ | mismatch |
+
+Aggregate agreement between operation-count ranking and 5406-feature wall-time ranking:
+- Pearson correlation: $r \approx 0.711$
+- Spearman correlation: $\rho \approx 0.754$
+
+This confirms the model captures intra-family speed relations well, while cross-family ordering is sensitive to constant factors not captured by asymptotic terms.
+
+### Assumption note (certification/GEOS cost model)
+
+Certification and shrink terms are reported in a geometry-size-sensitive worst-case model (written with $n$-dependent terms). In real runs, prepared-geometry predicates are opaque GEOS calls and can behave closer to near-constant time on favorable inputs. For BCRS Fast, CABF clamping uses `searchsorted` (a $O(\log n)$ component), but it is asymptotically dominated by the included $O(n)$ geometry-check term in this worst-case model.
