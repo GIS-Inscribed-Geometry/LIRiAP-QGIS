@@ -4,7 +4,7 @@ LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Proces
 
 ## Problem statement
 
-Given an input polygon, compute a largest-area non axis aligned rectangle that remains fully inside it. The target geometry includes concave polygons and polygons with holes, with an optional maximum aspect-ratio constraint.
+Given an input polygon, compute a largest-area non axis aligned rectangle. The target geometry includes concave polygons and polygons with holes, with an optional maximum aspect-ratio constraint.
 
 ## Uses
 
