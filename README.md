@@ -37,7 +37,7 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 
 ## Result screenshots
 
-### Approximation
+### Approximation (less vs more dense grid)
 
 ![Approximation result](media/Approximate.png)
 
