@@ -11,45 +11,49 @@ Stage model (consistent with README):
 """
 
 import numpy as np
-from shapely.geometry import box, MultiPolygon, Polygon
+from scipy.optimize import minimize_scalar
 from shapely.affinity import rotate
+from shapely.geometry import box, MultiPolygon, Polygon
 from shapely.vectorized import contains as shp_contains
 from shapely.wkb import loads as wkb_loads
-from scipy.optimize import minimize_scalar
 
 try:
     from numba import njit as _njit
+
     _NUMBA_AVAILABLE = True
 except ImportError:
     def _njit(fn=None, **kw):
         return fn if fn is not None else lambda f: f
+
+
     _NUMBA_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
 # Inner solver — O(n) largest-rectangle-in-histogram, JIT-compiled
 # ---------------------------------------------------------------------------
 @_njit(cache=True)
 def _histogram_kernel(heights, xs, ys, row_idx, max_ratio):
-    cols      = len(heights)
-    n_xs      = len(xs)
-    n_ys      = len(ys)
+    cols = len(heights)
+    n_xs = len(xs)
+    n_ys = len(ys)
     best_area = 0.0
     bx0 = by0 = bx1 = by1 = 0.0
     st_col = np.empty(cols + 1, dtype=np.int64)
-    st_h   = np.empty(cols + 1, dtype=np.int64)
-    top    = 0
+    st_h = np.empty(cols + 1, dtype=np.int64)
+    top = 0
     for c in range(cols + 1):
-        h     = int(heights[c]) if c < cols else 0
+        h = int(heights[c]) if c < cols else 0
         start = c
         while top > 0 and st_h[top - 1] > h:
             top -= 1
             sc = st_col[top]
             sh = st_h[top]
-            w  = c - sc
+            w = c - sc
             x0_w = xs[sc]
-            xi   = sc + w
+            xi = sc + w
             x1_w = xs[xi if xi < n_xs else n_xs - 1]
-            ri0  = row_idx - sh + 1
+            ri0 = row_idx - sh + 1
             y0_w = ys[ri0 if ri0 >= 0 else 0]
             y1_w = ys[row_idx if row_idx < n_ys else n_ys - 1]
             rw = x1_w - x0_w
@@ -58,7 +62,7 @@ def _histogram_kernel(heights, xs, ys, row_idx, max_ratio):
                 start = sc
                 continue
             if max_ratio > 0.0:
-                long_s  = rw if rw >= rh else rh
+                long_s = rw if rw >= rh else rh
                 short_s = rh if rw >= rh else rw
                 if short_s > 0.0 and long_s / short_s > max_ratio:
                     new_long = short_s * max_ratio
@@ -66,20 +70,22 @@ def _histogram_kernel(heights, xs, ys, row_idx, max_ratio):
                         cx = (x0_w + x1_w) * 0.5
                         x0_w = cx - new_long * 0.5
                         x1_w = cx + new_long * 0.5
-                        rw   = new_long
+                        rw = new_long
                     else:
                         cy = (y0_w + y1_w) * 0.5
                         y0_w = cy - new_long * 0.5
                         y1_w = cy + new_long * 0.5
-                        rh   = new_long
+                        rh = new_long
             area = rw * rh
             if area > best_area:
                 best_area = area
-                bx0 = x0_w;  by0 = y0_w
-                bx1 = x1_w;  by1 = y1_w
+                bx0 = x0_w;
+                by0 = y0_w
+                bx1 = x1_w;
+                by1 = y1_w
             start = sc
         st_col[top] = start
-        st_h[top]   = h
+        st_h[top] = h
         top += 1
     return bx0, by0, bx1, by1, best_area
 
@@ -130,11 +136,12 @@ def _edge_candidate_angles(poly, min_sep_deg=4.0, max_candidates=10):
     Build a length-weighted edge-orientation histogram for the polygon
     boundary and return dominant candidate angles in [0, 90°).
     """
-    coords  = np.array(poly.exterior.coords)
-    edges   = np.diff(coords, axis=0)
+    coords = np.array(poly.exterior.coords)
+    edges = np.diff(coords, axis=0)
     lengths = np.hypot(edges[:, 0], edges[:, 1])
-    valid   = lengths > 1e-12
-    edges   = edges[valid];  lengths = lengths[valid]
+    valid = lengths > 1e-12
+    edges = edges[valid];
+    lengths = lengths[valid]
 
     if len(edges) == 0:
         return np.array([0.0, 45.0])
@@ -142,14 +149,14 @@ def _edge_candidate_angles(poly, min_sep_deg=4.0, max_candidates=10):
     angles = np.degrees(np.arctan2(np.abs(edges[:, 1]),
                                    np.abs(edges[:, 0]))) % 90.0
 
-    bins   = np.zeros(91, dtype=np.float64)
+    bins = np.zeros(91, dtype=np.float64)
     for ang, wt in zip(angles, lengths):
         bins[min(int(round(ang)), 90)] += wt
 
     kernel = np.array([0.15, 0.25, 0.20, 0.25, 0.15])
-    bins   = np.convolve(bins, kernel, mode='same')
+    bins = np.convolve(bins, kernel, mode='same')
 
-    sep   = max(1, int(min_sep_deg))
+    sep = max(1, int(min_sep_deg))
     peaks = []
     for idx in np.argsort(bins)[::-1]:
         if not peaks or all(abs(int(idx) - p) >= sep for p in peaks):
@@ -178,7 +185,7 @@ def _upper_bound(poly, angle, max_ratio):
     bh = maxy - miny
 
     if max_ratio > 0.0:
-        long_s  = max(bw, bh)
+        long_s = max(bw, bh)
         short_s = min(bw, bh)
         if short_s > 0 and long_s / short_s > max_ratio:
             long_s = short_s * max_ratio
@@ -200,10 +207,10 @@ def _solve_axis_rect(poly, grid_steps, max_ratio):
     ys = np.linspace(miny, maxy, grid_steps)
 
     xx, yy = np.meshgrid(xs, ys)
-    mask   = shp_contains(poly, xx.ravel(), yy.ravel()) \
-                 .reshape(grid_steps, grid_steps)
+    mask = shp_contains(poly, xx.ravel(), yy.ravel()) \
+        .reshape(grid_steps, grid_steps)
 
-    heights   = np.zeros(grid_steps, dtype=np.int64)
+    heights = np.zeros(grid_steps, dtype=np.int64)
     best_rect = None
     best_area = 0.0
 
@@ -235,10 +242,10 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
     if not isinstance(shapely_poly, Polygon) or shapely_poly.is_empty:
         return None
 
-    centroid    = shapely_poly.centroid
-    best_area   = 0.0
-    best_rect   = None
-    best_angle  = 0.0
+    centroid = shapely_poly.centroid
+    best_area = 0.0
+    best_rect = None
+    best_angle = 0.0
 
     # ── Stage 1: edge-guided candidates ─────────────────────────────────────
     candidates = _edge_candidate_angles(shapely_poly)
@@ -252,8 +259,8 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
     # ── Stage 2: coarse-grid evaluation with early rejection ─────────────────
     # Sort candidates by descending upper-bound so the global best rises fast,
     # maximising pruning efficiency in the early-rejection test.
-    bounds   = [(a, _upper_bound(shapely_poly, a, max_ratio))
-                for a in candidates]
+    bounds = [(a, _upper_bound(shapely_poly, a, max_ratio))
+              for a in candidates]
     bounds.sort(key=lambda t: t[1], reverse=True)
 
     for angle, ub in bounds:
@@ -266,14 +273,14 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
                           origin=centroid, use_radians=False)
         rect, area = _solve_axis_rect(rot_poly, grid_steps_coarse, max_ratio)
         if area > best_area:
-            best_area  = area
-            best_rect  = rect
+            best_area = area
+            best_rect = rect
             best_angle = float(angle)
 
     # ── Stage 2: fallback uniform sweep for isotropic/featureless polygons ───
     if best_rect is None or len(candidates) <= 4:
         for angle in range(0, 180, angle_step):
-            a  = float(angle % 90)
+            a = float(angle % 90)
             ub = _upper_bound(shapely_poly, a, max_ratio)
             if ub <= best_area:
                 continue
@@ -281,8 +288,8 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
                               origin=centroid, use_radians=False)
             rect, area = _solve_axis_rect(rot_poly, grid_steps_coarse, max_ratio)
             if area > best_area:
-                best_area  = area
-                best_rect  = rect
+                best_area = area
+                best_rect = rect
                 best_angle = a
 
     if best_rect is None:
@@ -293,7 +300,6 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
         rp = rotate(shapely_poly, -a, origin=centroid, use_radians=False)
         _, area = _solve_axis_rect(rp, grid_steps_fine, max_ratio)
         return -area
-
 
     lo = best_angle - half_window
     hi = best_angle + half_window

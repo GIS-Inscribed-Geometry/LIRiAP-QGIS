@@ -240,4 +240,3 @@ class InscribedRectangleApproximationFast(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return build_short_help("Approximation Fast", "approximation_fast", _NUMBA_AVAILABLE)
-

@@ -2,7 +2,6 @@
 Shared user-facing descriptions for LIRiAP processing algorithms.
 """
 
-
 _BASELINE = (
     "<div style='font-family:Segoe UI, Arial, sans-serif; font-size:10pt; line-height:1.35;'>"
     "<p><b>Problem framing</b><br/>"
@@ -14,7 +13,6 @@ _BASELINE = (
     "</ul>"
     "<p>Concave polygons and polygons with holes are supported.</p>"
 )
-
 
 _ALGORITHM_DETAILS = {
     "approximation_standard": (

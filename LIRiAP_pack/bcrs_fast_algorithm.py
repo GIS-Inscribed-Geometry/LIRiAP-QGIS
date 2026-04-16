@@ -37,7 +37,6 @@ from bcrs_fast_worker import process_slice, _worker_process_feature, _NUMBA_AVAI
 from help_descriptions import build_short_help
 from numba_bootstrap import ensure_numba
 
-
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -292,4 +291,3 @@ class InscribedRectangleBCRSFast(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return build_short_help("BCRS Fast", "bcrs_fast", _NUMBA_AVAILABLE)
-

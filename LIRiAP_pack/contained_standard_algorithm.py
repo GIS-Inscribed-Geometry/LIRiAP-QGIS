@@ -37,7 +37,7 @@ from help_descriptions import build_short_help
 from numba_bootstrap import ensure_numba
 
 
-    # Process a contiguous feature slice using the worker's native logic.
+# Process a contiguous feature slice using the worker's native logic.
 def _process_slice(job_array, start, end, shared_params):
     out = {}
     best_effort_count = 0
@@ -274,4 +274,3 @@ class InscribedRectangleContainedStandard(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return build_short_help("Contained Standard", "contained_standard", _NUMBA_AVAILABLE)
-

@@ -37,7 +37,7 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 
 ## Result screenshots
 
-### Approximation
+### Approximation (less vs denser grid)
 
 ![Approximation result](media/Approximate.png)
 
@@ -47,7 +47,7 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 
 ![Contained result](media/Contained.png)
 
-### BCRS
+### BCRS (Boundary-Coordinate Raster Solve)
 
 ![BCRS result](media/BCRS.png)
 
@@ -256,7 +256,7 @@ flowchart TD
 3. Keeps containment guarantees and diagnostics behavior aligned with Standard.
 4. **Semantics**: identical to Contained Standard.
 
-### BCRS (moderately novel method)
+### BCRS
 
 ```mermaid
 flowchart TD
@@ -328,12 +328,12 @@ flowchart TD
 | $g_{fine}$   | Fine grid size (`GRID_FINE`).                                                                 |
 | $k$          | Candidate count kept for refinement (`TOP_K`).                                                |
 | $m$          | Edge-guided initial angle candidates ($\le 12$ in contained/BCRS, $\le 10$ in approximation). |
-| $s_{90}$     | Fallback sweep size: $s_{90}=\lceil 90/a\rceil$, where $a=$ `ANGLE_STEP`. |
-| $s_{180}$    | Approximation fallback sweep size: $s_{180}=\lceil 180/a\rceil$, where $a=$ `ANGLE_STEP`. |
+| $s_{90}$     | Fallback sweep size:$s_{90}=\lceil 90/a\rceil$, where $a=$ `ANGLE_STEP`.                      |
+| $s_{180}$    | Approximation fallback sweep size:$s_{180}=\lceil 180/a\rceil$, where $a=$ `ANGLE_STEP`.      |
 | $p$          | Brent objective evaluations (`maxiter=60` where explicitly set).                              |
 | $t$          | Stage 4-5 angle trials per candidate ($\le 4$ in BCRS, $\le 2$ in BCRS Fast).                 |
 | $X,Y$        | Unique boundary x/y coordinates after rotation (BCRS grid lines).                             |
-| $\nu$        | BCRS cell count: $\nu=(\lvert X\rvert-1)(\lvert Y\rvert-1)$. |
+| $\nu$        | BCRS cell count:$\nu=(\lvert X\rvert-1)(\lvert Y\rvert-1)$.                                   |
 
 ### Primitive solver costs (from implementation loops)
 
@@ -378,12 +378,12 @@ T_{\text{feature,BCRS}} = T_{\text{angles}} + T_{\text{stage1}} + T_{\text{refin
 $$
 
 
-| Algorithm              | Worst-case time (single feature)                                                                                 | Memory                                          |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| Approximation Standard | $O\left(n + (m+s_{180})g_{coarse}^2 + (p+1)g_{fine}^2\right)$ (single refined candidate)                     | $O\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
-| Approximation Fast     | same geometric order as Approximation Standard (batch/slice execution changes constants)                         | same                                            |
-| Contained Standard     | $O\left(n + (m+s_{90})g_{coarse}^2 + k\left((p+2)g_{fine}^2 + n\right)\right)$                               | $O\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
-| Contained Fast         | $O\left(n + (m+s_{90})g_{coarse}^2 + k\left(pg_{coarse}^2 + g_{fine}^2 + n\right)\right)$                    | $O\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
+| Algorithm              | Worst-case time (single feature)                                                                                 | Memory                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Approximation Standard | $O\left(n + (m+s_{180})g_{coarse}^2 + (p+1)g_{fine}^2\right)$ (single refined candidate)                         | $O\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
+| Approximation Fast     | same geometric order as Approximation Standard (batch/slice execution changes constants)                         | same                                          |
+| Contained Standard     | $O\left(n + (m+s_{90})g_{coarse}^2 + k\left((p+2)g_{fine}^2 + n\right)\right)$                                   | $O\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
+| Contained Fast         | $O\left(n + (m+s_{90})g_{coarse}^2 + k\left(pg_{coarse}^2 + g_{fine}^2 + n\right)\right)$                        | $O\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
 | BCRS                   | $O\left(n + (m+s_{90})g_{coarse}^2 + k\left(pg_{coarse}^2 + t(g_{fine}^2 + n\log n + \nu + n) + n\right)\right)$ | $O\left(\max(g_{fine}^2,\nu)\right)$          |
 | BCRS Fast              | $O\left(n + (m+s_{90})g_{coarse}^2 + k\left((p+4)g_{coarse}^2 + t(n\log n + \nu + n) + n\right)\right),\ t\le2$  | $O\left(\max(g_{coarse}^2,\nu)\right)$        |
 
@@ -404,6 +404,7 @@ $$
 ### Default-parameter operation model (from algorithm defaults)
 
 Defaults used for this calculation:
+
 - Approximation family: $g_{coarse}=40$, $g_{fine}=100$, single refined candidate ($k=1$ effective), `ANGLE_STEP` $=5$.
 - Contained/BCRS families: $g_{coarse}=40$, $g_{fine}=120$, $k=3$, `ANGLE_STEP` $=5$.
 
@@ -425,24 +426,21 @@ These are complexity-weighted operation counts, not wall-clock predictions.
 ### Verification test: expected relations vs wall-clock times
 
 Assumptions used for this verification block:
+
 - Approximation Standard/Fast: effective $k=1$, $g_{fine}=100$.
 - Contained and BCRS families: $k=3$, $g_{fine}=120$.
 
 Using baseline 5406-feature wall times (`N_WORKERS=1`, no chunking):
 
-| Relation check | Model expectation | Measured times | Result |
-| --- | --- | --- | --- |
+
+| Relation check                 | Model expectation                    | Measured times         | Result     |
+| ------------------------------ | ------------------------------------ | ---------------------- | ---------- |
 | Approximation Fast vs Standard | nearly equal (same asymptotic order) | $125.93s$ vs $127.25s$ | consistent |
-| Contained Fast vs Standard | Fast should be lower | $226.05s < 574.13s$ | consistent |
-| BCRS Fast vs BCRS | Fast should be lower | $445.01s < 772.05s$ | consistent |
-| Approximation Standard vs Contained Fast | model estimate favors Contained Fast | $127.25s < 226.05s$ | mismatch |
-| Contained Standard vs BCRS | model estimate favors BCRS | $574.13s < 772.05s$ | mismatch |
+| Contained Fast vs Standard     | Fast should be lower                 | $226.05s < 574.13s$    | consistent |
+| BCRS Fast vs BCRS              | Fast should be lower                 | $445.01s < 772.05s$    | consistent |
+| Contained Standard vs BCRS     | model estimate favors BCRS           | $574.13s < 772.05s$    | mismatch   |
 
-Aggregate agreement between operation-count ranking and 5406-feature wall-time ranking:
-- Pearson correlation: $r \approx 0.711$
-- Spearman correlation: $\rho \approx 0.754$
-
-This confirms the model captures intra-family speed relations well, while cross-family ordering is sensitive to constant factors not captured by asymptotic terms.
+This confirms the model captures intra-family speed relations well; cross-family ordering can remain sensitive to solver semantics, settings, and constant factors not captured by asymptotic terms.
 
 ### Assumption note (certification/GEOS cost model)
 

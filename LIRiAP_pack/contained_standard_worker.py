@@ -12,22 +12,27 @@
 from __future__ import annotations
 
 import math
+
 import numpy as np
-from shapely.geometry import box, MultiPolygon, Polygon, Point
+from scipy.optimize import minimize_scalar
 from shapely.affinity import rotate as shp_rotate
+from shapely.geometry import box, MultiPolygon, Polygon, Point
 from shapely.prepared import prep as shp_prep
 from shapely.wkb import loads as wkb_loads
-from scipy.optimize import minimize_scalar
 
 # --------------------------------------------------------------------------
 # Vectorised point-in-polygon (Shapely 1.x + 2.x compat)
 # --------------------------------------------------------------------------
 try:
     from shapely.vectorized import contains as _shp_contains_vec
+
+
     def _mask_from_poly(poly, xx_flat, yy_flat):
         return _shp_contains_vec(poly, xx_flat, yy_flat)
 except ImportError:
     import shapely as _shp2
+
+
     def _mask_from_poly(poly, xx_flat, yy_flat):
         pts = _shp2.points(xx_flat, yy_flat)
         return _shp2.contains(poly, pts)
@@ -37,10 +42,13 @@ except ImportError:
 # --------------------------------------------------------------------------
 try:
     from numba import njit as _njit
+
     _NUMBA_AVAILABLE = True
 except ImportError:
     def _njit(fn=None, **kw):
         return fn if fn is not None else (lambda f: f)
+
+
     _NUMBA_AVAILABLE = False
 
 
@@ -52,33 +60,35 @@ except ImportError:
 # ==========================================================================
 @_njit(cache=True)
 def _histogram_kernel(heights, xs, ys, row_idx, max_ratio):
-    cols  = len(heights)
-    n_xs  = len(xs)
-    n_ys  = len(ys)
-    best  = 0.0
+    cols = len(heights)
+    n_xs = len(xs)
+    n_ys = len(ys)
+    best = 0.0
     bx0 = by0 = bx1 = by1 = 0.0
     # Pre-allocated stack
     st_col = np.empty(cols + 1, dtype=np.int64)
-    st_h   = np.empty(cols + 1, dtype=np.int64)
-    top    = 0
+    st_h = np.empty(cols + 1, dtype=np.int64)
+    top = 0
 
     for c in range(cols + 1):
-        h     = int(heights[c]) if c < cols else 0
+        h = int(heights[c]) if c < cols else 0
         start = c
         while top > 0 and st_h[top - 1] > h:
             top -= 1
-            sc = st_col[top]; sh = st_h[top]
-            w  = c - sc
-            xi   = sc + w
+            sc = st_col[top];
+            sh = st_h[top]
+            w = c - sc
+            xi = sc + w
             x0_w = xs[sc]
             x1_w = xs[xi if xi < n_xs else n_xs - 1]
-            ri0  = row_idx - sh + 1
+            ri0 = row_idx - sh + 1
             y0_w = ys[ri0 if ri0 >= 0 else 0]
             y1_w = ys[row_idx if row_idx < n_ys else n_ys - 1]
             rw = x1_w - x0_w
             rh = y1_w - y0_w
             if rw <= 0.0 or rh <= 0.0:
-                start = sc; continue
+                start = sc;
+                continue
             if max_ratio > 0.0:
                 ls = rw if rw >= rh else rh
                 ss = rh if rw >= rh else rw
@@ -86,17 +96,25 @@ def _histogram_kernel(heights, xs, ys, row_idx, max_ratio):
                     nl = ss * max_ratio
                     if rw >= rh:
                         cx = (x0_w + x1_w) * 0.5
-                        x0_w = cx - nl * 0.5; x1_w = cx + nl * 0.5
+                        x0_w = cx - nl * 0.5;
+                        x1_w = cx + nl * 0.5
                     else:
                         cy = (y0_w + y1_w) * 0.5
-                        y0_w = cy - nl * 0.5; y1_w = cy + nl * 0.5
-                    rw = x1_w - x0_w; rh = y1_w - y0_w
+                        y0_w = cy - nl * 0.5;
+                        y1_w = cy + nl * 0.5
+                    rw = x1_w - x0_w;
+                    rh = y1_w - y0_w
             area = rw * rh
             if area > best:
                 best = area
-                bx0 = x0_w; by0 = y0_w; bx1 = x1_w; by1 = y1_w
+                bx0 = x0_w;
+                by0 = y0_w;
+                bx1 = x1_w;
+                by1 = y1_w
             start = sc
-        st_col[top] = start; st_h[top] = h; top += 1
+        st_col[top] = start;
+        st_h[top] = h;
+        top += 1
 
     return bx0, by0, bx1, by1, best
 
@@ -110,18 +128,21 @@ def _solve_axis_rect_grid(poly, grid_steps, max_ratio):
     minx, miny, maxx, maxy = poly.bounds
     xs = np.linspace(minx, maxx, grid_steps)
     ys = np.linspace(miny, maxy, grid_steps)
-    xx, yy  = np.meshgrid(xs, ys)
-    flat    = _mask_from_poly(poly, xx.ravel(), yy.ravel())
-    mask    = flat.reshape(grid_steps, grid_steps)
+    xx, yy = np.meshgrid(xs, ys)
+    flat = _mask_from_poly(poly, xx.ravel(), yy.ravel())
+    mask = flat.reshape(grid_steps, grid_steps)
     heights = np.zeros(grid_steps, dtype=np.int64)
-    best_rect = None; best_area = 0.0
+    best_rect = None;
+    best_area = 0.0
 
     for r in range(grid_steps):
-        row      = mask[r].astype(np.int64)
-        heights += row; heights *= row          # in-place, no temp allocation
+        row = mask[r].astype(np.int64)
+        heights += row;
+        heights *= row  # in-place, no temp allocation
         x0, y0, x1, y1, area = _histogram_kernel(heights, xs, ys, r, max_ratio)
         if area > best_area:
-            best_area = area; best_rect = box(x0, y0, x1, y1)
+            best_area = area;
+            best_rect = box(x0, y0, x1, y1)
 
     return best_rect, best_area
 
@@ -136,8 +157,9 @@ def _edge_y_crossings_at_x(ring_coords, x_query):
     n = len(ring_coords) - 1
     for i in range(n):
         xa, ya = ring_coords[i, 0], ring_coords[i, 1]
-        xb, yb = ring_coords[i+1, 0], ring_coords[i+1, 1]
-        xlo = min(xa, xb); xhi = max(xa, xb)
+        xb, yb = ring_coords[i + 1, 0], ring_coords[i + 1, 1]
+        xlo = min(xa, xb);
+        xhi = max(xa, xb)
         if xlo < x_query <= xhi:
             dx = xb - xa
             if abs(dx) < 1e-14: continue
@@ -148,16 +170,16 @@ def _edge_y_crossings_at_x(ring_coords, x_query):
 
 def _net_valid_y_intervals(rot_poly, x_mid):
     ext_arr = np.asarray(rot_poly.exterior.coords, dtype=np.float64)
-    ext_c   = _edge_y_crossings_at_x(ext_arr, x_mid)
-    include = [(ext_c[k], ext_c[k+1]) for k in range(0, len(ext_c)-1, 2)]
+    ext_c = _edge_y_crossings_at_x(ext_arr, x_mid)
+    include = [(ext_c[k], ext_c[k + 1]) for k in range(0, len(ext_c) - 1, 2)]
     if not include:
         return []
     free = list(include)
     for interior in rot_poly.interiors:
         h_arr = np.asarray(interior.coords, dtype=np.float64)
-        h_c   = _edge_y_crossings_at_x(h_arr, x_mid)
-        for k in range(0, len(h_c)-1, 2):
-            hlo, hhi = h_c[k], h_c[k+1]
+        h_c = _edge_y_crossings_at_x(h_arr, x_mid)
+        for k in range(0, len(h_c) - 1, 2):
+            hlo, hhi = h_c[k], h_c[k + 1]
             new_free = []
             for (flo, fhi) in free:
                 if hhi <= flo or hlo >= fhi:
@@ -183,30 +205,32 @@ def _solve_axis_rect_slab(rot_poly, max_ratio, n_extra=6):
         all_x.extend(np.asarray(interior.coords)[:, 0].tolist())
     xev = np.unique(np.array(all_x, dtype=np.float64))
     xev = xev[(xev > minx + 1e-12) & (xev < maxx - 1e-12)]
-    xb  = np.unique(np.concatenate([[minx], xev, [maxx]]))
+    xb = np.unique(np.concatenate([[minx], xev, [maxx]]))
 
     slabs = []
-    for i in range(len(xb)-1):
-        xa, xb_i = float(xb[i]), float(xb[i+1])
+    for i in range(len(xb) - 1):
+        xa, xb_i = float(xb[i]), float(xb[i + 1])
         dx = (xb_i - xa) / (n_extra + 1)
         for k in range(n_extra + 1):
-            slabs.append((xa + k*dx, xa + (k+1)*dx))
+            slabs.append((xa + k * dx, xa + (k + 1) * dx))
 
     EPS = 1e-9
-    n   = len(slabs)
-    ylo = np.full(n, np.nan); yhi = np.full(n, np.nan)
+    n = len(slabs)
+    ylo = np.full(n, np.nan);
+    yhi = np.full(n, np.nan)
 
     for i, (xl, xr) in enumerate(slabs):
         ivs_l = _net_valid_y_intervals(rot_poly, xl + EPS)
         ivs_r = _net_valid_y_intervals(rot_poly, xr - EPS)
         if not ivs_l or not ivs_r: continue
-        bl = max(ivs_l, key=lambda iv: iv[1]-iv[0])
-        br = max(ivs_r, key=lambda iv: iv[1]-iv[0])
+        bl = max(ivs_l, key=lambda iv: iv[1] - iv[0])
+        br = max(ivs_r, key=lambda iv: iv[1] - iv[0])
         lo = max(bl[0], br[0]) + EPS
         hi = min(bl[1], br[1]) - EPS
         if hi > lo: ylo[i] = lo; yhi[i] = hi
 
-    best_area = 0.0; best_box = None
+    best_area = 0.0;
+    best_box = None
     for l in range(n):
         if math.isnan(ylo[l]): continue
         cur_lo, cur_hi = ylo[l], yhi[l]
@@ -215,20 +239,30 @@ def _solve_axis_rect_slab(rot_poly, max_ratio, n_extra=6):
             cur_lo = max(cur_lo, ylo[r])
             cur_hi = min(cur_hi, yhi[r])
             if cur_hi <= cur_lo: break
-            rx0 = slabs[l][0]; rx1 = slabs[r][1]
-            rw  = rx1 - rx0;   rh  = cur_hi - cur_lo
+            rx0 = slabs[l][0];
+            rx1 = slabs[r][1]
+            rw = rx1 - rx0;
+            rh = cur_hi - cur_lo
             if rw <= 0 or rh <= 0: continue
             if max_ratio > 0.0:
-                ls = max(rw,rh); ss = min(rw,rh)
-                if ss > 0 and ls/ss > max_ratio:
+                ls = max(rw, rh);
+                ss = min(rw, rh)
+                if ss > 0 and ls / ss > max_ratio:
                     nl = ss * max_ratio
                     if rw >= rh:
-                        cx=(rx0+rx1)*0.5; rx0=cx-nl/2; rx1=cx+nl/2; rw=nl
+                        cx = (rx0 + rx1) * 0.5;
+                        rx0 = cx - nl / 2;
+                        rx1 = cx + nl / 2;
+                        rw = nl
                     else:
-                        cy=(cur_lo+cur_hi)*0.5; cur_lo=cy-nl/2; cur_hi=cy+nl/2; rh=nl
+                        cy = (cur_lo + cur_hi) * 0.5;
+                        cur_lo = cy - nl / 2;
+                        cur_hi = cy + nl / 2;
+                        rh = nl
             area = rw * rh
             if area > best_area:
-                best_area = area; best_box = box(rx0, cur_lo, rx1, cur_hi)
+                best_area = area;
+                best_box = box(rx0, cur_lo, rx1, cur_hi)
     return best_box, best_area
 
 
@@ -239,24 +273,25 @@ def _solve_axis_rect_slab(rot_poly, max_ratio, n_extra=6):
 #    Falls back to uniform sampling if the polygon has few distinct edges.
 # ==========================================================================
 def _edge_candidate_angles(poly, min_sep_deg=4.0, max_candidates=12):
-    coords  = np.asarray(poly.exterior.coords, dtype=np.float64)
-    edges   = np.diff(coords, axis=0)
+    coords = np.asarray(poly.exterior.coords, dtype=np.float64)
+    edges = np.diff(coords, axis=0)
     lengths = np.hypot(edges[:, 0], edges[:, 1])
-    valid   = lengths > 1e-12
+    valid = lengths > 1e-12
     if not valid.any():
         return np.array([0.0, 45.0])
-    edges = edges[valid]; lengths = lengths[valid]
-    angles = np.degrees(np.arctan2(np.abs(edges[:,1]),
-                                   np.abs(edges[:,0]))) % 90.0
+    edges = edges[valid];
+    lengths = lengths[valid]
+    angles = np.degrees(np.arctan2(np.abs(edges[:, 1]),
+                                   np.abs(edges[:, 0]))) % 90.0
     bins = np.zeros(91, dtype=np.float64)
     for ang, wt in zip(angles, lengths):
         bins[min(int(round(ang)), 90)] += wt
     kernel = np.array([0.1, 0.2, 0.4, 0.2, 0.1])
-    bins   = np.convolve(bins, kernel, mode='same')
-    sep    = max(1, int(min_sep_deg))
-    peaks  = []
+    bins = np.convolve(bins, kernel, mode='same')
+    sep = max(1, int(min_sep_deg))
+    peaks = []
     for idx in np.argsort(bins)[::-1]:
-        if not peaks or all(abs(int(idx)-p) >= sep for p in peaks):
+        if not peaks or all(abs(int(idx) - p) >= sep for p in peaks):
             peaks.append(int(idx))
         if len(peaks) >= max_candidates:
             break
@@ -265,20 +300,21 @@ def _edge_candidate_angles(poly, min_sep_deg=4.0, max_candidates=12):
 
 def _upper_bound_area(poly, angle, max_ratio, centroid):
     rot = shp_rotate(poly, -angle, origin=centroid, use_radians=False)
-    bw, bh = rot.bounds[2]-rot.bounds[0], rot.bounds[3]-rot.bounds[1]
+    bw, bh = rot.bounds[2] - rot.bounds[0], rot.bounds[3] - rot.bounds[1]
     if max_ratio > 0.0:
-        ls = max(bw,bh); ss = min(bw,bh)
-        if ss > 0 and ls/ss > max_ratio: ls = ss * max_ratio
+        ls = max(bw, bh);
+        ss = min(bw, bh)
+        if ss > 0 and ls / ss > max_ratio: ls = ss * max_ratio
         return ls * ss * 0.5
     return bw * bh * 0.5
 
 
 def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
-                           max_ratio, top_k):
+                          max_ratio, top_k):
     """Stage 1 candidate generation using edge-guided heuristic search."""
     centroid = poly.centroid
-    cx, cy   = centroid.x, centroid.y
-    raw      = []
+    cx, cy = centroid.x, centroid.y
+    raw = []
     best_area = 0.0
 
     # Priority 1: dominant edge orientations
@@ -286,7 +322,7 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
         ub = _upper_bound_area(poly, float(angle), max_ratio, centroid)
         if ub <= best_area * 0.85:
             continue
-        rot  = shp_rotate(poly, -float(angle), origin=centroid, use_radians=False)
+        rot = shp_rotate(poly, -float(angle), origin=centroid, use_radians=False)
         rect, area = _solve_axis_rect_grid(rot, grid_coarse, max_ratio)
         if area > 0:
             raw.append((area, float(angle), rect))
@@ -301,7 +337,7 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
             ub = _upper_bound_area(poly, a, max_ratio, centroid)
             if ub <= best_area * 0.85:
                 continue
-            rot  = shp_rotate(poly, -a, origin=centroid, use_radians=False)
+            rot = shp_rotate(poly, -a, origin=centroid, use_radians=False)
             rect, area = _solve_axis_rect_grid(rot, grid_coarse, max_ratio)
             if area > 0:
                 raw.append((area, a, rect))
@@ -310,7 +346,8 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
     raw.sort(key=lambda t: t[0], reverse=True)
 
     # Deduplicate by angle proximity
-    kept = []; seen = []
+    kept = [];
+    seen = []
     for area, angle, rect_rot in raw:
         if any(abs(angle - s) < 2.0 for s in seen):
             continue
@@ -327,17 +364,17 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
 # ==========================================================================
 # ⑤ STAGE 2 — REFINEMENT
 # ==========================================================================
-_PHASE_A_XATOL     = 0.05    # degrees tolerance for Brent
-_PHASE_A_HALFWIDTH = 3.0     # ± bracket in degrees
-_CERT_EPS          = 1e-7    # inset after certification
-_CERT_MAX_SHRINK   = 0.2    # maximum symmetric shrink as fraction of shorter side
+_PHASE_A_XATOL = 0.05  # degrees tolerance for Brent
+_PHASE_A_HALFWIDTH = 3.0  # ± bracket in degrees
+_CERT_EPS = 1e-7  # inset after certification
+_CERT_MAX_SHRINK = 0.2  # maximum symmetric shrink as fraction of shorter side
 
 
 def _polish_angle(poly, candidate, grid_fine, max_ratio):
     """Stage 2: Brent minimisation around candidate angle."""
-    angle_0  = candidate['angle']
+    angle_0 = candidate['angle']
     centroid = Point(candidate['center'])
-    lo, hi   = angle_0 - _PHASE_A_HALFWIDTH, angle_0 + _PHASE_A_HALFWIDTH
+    lo, hi = angle_0 - _PHASE_A_HALFWIDTH, angle_0 + _PHASE_A_HALFWIDTH
 
     def _neg_area(a):
         rot = shp_rotate(poly, -a, origin=centroid, use_radians=False)
@@ -350,7 +387,7 @@ def _polish_angle(poly, candidate, grid_fine, max_ratio):
         if res.fun < -candidate['area'] + 1e-10:
             c = candidate.copy()
             c['angle'] = float(res.x)
-            c['area']  = float(-res.fun)
+            c['area'] = float(-res.fun)
             return c
     except Exception:
         pass
@@ -360,24 +397,32 @@ def _polish_angle(poly, candidate, grid_fine, max_ratio):
 def _rect_local_frame(rect):
     coords = list(rect.exterior.coords)
     if len(coords) < 5: return None
-    p0 = np.array(coords[0][:2]); p1 = np.array(coords[1][:2])
+    p0 = np.array(coords[0][:2]);
+    p1 = np.array(coords[1][:2])
     p2 = np.array(coords[2][:2])
-    e0 = p1 - p0; e1 = p2 - p1
-    l0 = float(np.linalg.norm(e0)); l1 = float(np.linalg.norm(e1))
+    e0 = p1 - p0;
+    e1 = p2 - p1
+    l0 = float(np.linalg.norm(e0));
+    l1 = float(np.linalg.norm(e1))
     if l0 < 1e-14 or l1 < 1e-14: return None
-    cx = float((p0[0] + p2[0]) / 2); cy = float((p0[1] + p2[1]) / 2)
+    cx = float((p0[0] + p2[0]) / 2);
+    cy = float((p0[1] + p2[1]) / 2)
     if l0 >= l1:
-        ux, uy = e0[0]/l0, e0[1]/l0; vx, vy = e1[0]/l1, e1[1]/l1; a, b = l0/2, l1/2
+        ux, uy = e0[0] / l0, e0[1] / l0;
+        vx, vy = e1[0] / l1, e1[1] / l1;
+        a, b = l0 / 2, l1 / 2
     else:
-        ux, uy = e1[0]/l1, e1[1]/l1; vx, vy = e0[0]/l0, e0[1]/l0; a, b = l1/2, l0/2
+        ux, uy = e1[0] / l1, e1[1] / l1;
+        vx, vy = e0[0] / l0, e0[1] / l0;
+        a, b = l1 / 2, l0 / 2
     return cx, cy, ux, uy, vx, vy, a, b
 
 
 def _build_rect_from_frame(cx, cy, ux, uy, vx, vy, a, b):
-    corners = [(cx+a*ux+b*vx, cy+a*uy+b*vy),
-               (cx-a*ux+b*vx, cy-a*uy+b*vy),
-               (cx-a*ux-b*vx, cy-a*uy-b*vy),
-               (cx+a*ux-b*vx, cy+a*uy-b*vy)]
+    corners = [(cx + a * ux + b * vx, cy + a * uy + b * vy),
+               (cx - a * ux + b * vx, cy - a * uy + b * vy),
+               (cx - a * ux - b * vx, cy - a * uy - b * vy),
+               (cx + a * ux - b * vx, cy + a * uy - b * vy)]
     return Polygon(corners + [corners[0]])
 
 
@@ -411,9 +456,10 @@ def _certify_and_adjust(poly, rect, max_ratio, buf_enabled, buf_value):
         if shrink > min(a, b) * _CERT_MAX_SHRINK:
             return None, 0.0
 
-        new_a = a - shrink; new_b = b - shrink
+        new_a = a - shrink;
+        new_b = b - shrink
         if new_a <= 0 or new_b <= 0: return None, 0.0
-        if max_ratio > 0.0 and new_b > 0 and new_a/new_b > max_ratio:
+        if max_ratio > 0.0 and new_b > 0 and new_a / new_b > max_ratio:
             new_a = new_b * max_ratio
 
         final = _build_rect_from_frame(cx, cy, ux, uy, vx, vy, new_a, new_b)
@@ -425,6 +471,7 @@ def _certify_and_adjust(poly, rect, max_ratio, buf_enabled, buf_value):
             final = cand
 
     return final, float(final.area)
+
 
 def _conservative_inner_fallback(poly, grid_fine, max_ratio, centroid, angles):
     best_rect = None
@@ -462,6 +509,7 @@ def _conservative_inner_fallback(poly, grid_fine, max_ratio, centroid, angles):
             return best_rect, best_area, best_angle
 
     return None, 0.0, None
+
 
 def _best_effort_shrink_to_cover(poly, rect, max_ratio, tol=1e-7, max_iter=40):
     """
@@ -534,7 +582,7 @@ def _best_effort_shrink_to_cover(poly, rect, max_ratio, tol=1e-7, max_iter=40):
 
 
 def _refine_best_candidate(poly, candidates, grid_fine, max_ratio,
-                            buf_enabled, buf_value, always_return):
+                           buf_enabled, buf_value, always_return):
     """Full Stage 2 pipeline. Returns 7-tuple or None."""
     certified = []
     fallback_best = None
@@ -637,6 +685,7 @@ def _refine_best_candidate(poly, candidates, grid_fine, max_ratio,
     return (best['rect'], best['area'], best['angle'],
             best['ratio'], best['rank'], best['stage2_gain'],
             best['used_best_effort'])
+
 
 # ==========================================================================
 # ⑥ GEOMETRY PREPARATION
