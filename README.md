@@ -1,6 +1,6 @@
 # LIRiAP
 
-LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Processing algorithms for computing largest inscribed rectangles for polygon features.
+LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Processing algorithms for computing largest inscribed rectangles approximations for polygon features.
 
 ## Problem statement
 
@@ -12,7 +12,7 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 
 ## At a glance
 
-From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements.
+From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements (time of processing vs accuracy).
 
 
 | Family        | Primary objective                            | Strict containment               | Boundary expansion |
@@ -55,7 +55,7 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 
 ---
 
-## Uses
+## Potential uses
 
 - **Suitability analysis task scenarios**: search candidate locations for building or infrastructure placement by finding the largest feasible rectangular footprint inside constrained parcels (e.g., houses, warehouses, solar arrays, staging pads, retention structures) while respecting parcel boundaries and holes/exclusions.
 - **Remote sensing scenarios**: derive stable interior rectangular patches for spectral sampling, calibration windows, texture statistics, and object-level summaries where centroid or full-polygon sampling is noisy.
@@ -134,7 +134,7 @@ All runs assume default algorithm parameters and Numba installed. 290 and 5406 a
 ### Parallel profile (N_WORKERS=12, USE_CHUNKING=False)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
 | ------- | ---------------------- | ------------------------ | ---------------------------- | --------------- | ------------------------ |
 | P1      | Approximation Standard | n/a                      | 5.97*                        | 112.30          | 18.8107                  |
 | P2      | Approximation Fast     | n/a                      | 5.90*                        | 108.43          | 18.3780                  |
