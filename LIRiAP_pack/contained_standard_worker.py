@@ -320,7 +320,7 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
     # Priority 1: dominant edge orientations
     for angle in _edge_candidate_angles(poly):
         ub = _upper_bound_area(poly, float(angle), max_ratio, centroid)
-        if ub <= best_area * 0.85:
+        if ub <= best_area * _PRUNE_MARGIN:
             continue
         rot = shp_rotate(poly, -float(angle), origin=centroid, use_radians=False)
         rect, area = _solve_axis_rect_grid(rot, grid_coarse, max_ratio)
@@ -329,13 +329,13 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
             if area > best_area: best_area = area
 
     # Priority 2: uniform fallback if edge heuristic under-covers
-    if len(raw) < 3:
+    if len(raw) < _MIN_STAGE1_CANDIDATES:
         for a_int in range(0, 90, angle_step):
             a = float(a_int)
-            if any(abs(a - ar[1]) < 2.0 for ar in raw):
+            if any(abs(a - ar[1]) < _ANGLE_DEDUP_DEG for ar in raw):
                 continue
             ub = _upper_bound_area(poly, a, max_ratio, centroid)
-            if ub <= best_area * 0.85:
+            if ub <= best_area * _PRUNE_MARGIN:
                 continue
             rot = shp_rotate(poly, -a, origin=centroid, use_radians=False)
             rect, area = _solve_axis_rect_grid(rot, grid_coarse, max_ratio)
@@ -349,7 +349,7 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
     kept = [];
     seen = []
     for area, angle, rect_rot in raw:
-        if any(abs(angle - s) < 2.0 for s in seen):
+        if any(abs(angle - s) < _ANGLE_DEDUP_DEG for s in seen):
             continue
         seen.append(angle)
         rect_world = shp_rotate(rect_rot, angle, origin=centroid, use_radians=False)
@@ -364,10 +364,15 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
 # ==========================================================================
 # ⑤ STAGE 2 — REFINEMENT
 # ==========================================================================
-_PHASE_A_XATOL = 0.05  # degrees tolerance for Brent
-_PHASE_A_HALFWIDTH = 3.0  # ± bracket in degrees
-_CERT_EPS = 1e-7  # inset after certification
-_CERT_MAX_SHRINK = 0.2  # maximum symmetric shrink as fraction of shorter side
+_PHASE_A_XATOL = 0.05  # Brent angle tolerance [deg]
+_PHASE_A_HALFWIDTH = 3.0  # Brent bracket half-width [deg]
+_PRUNE_MARGIN = 0.85  # Stage-1 upper-bound pruning factor
+_MIN_STAGE1_CANDIDATES = 3  # fallback sweep trigger when edge-guided pass under-fills
+_ANGLE_DEDUP_DEG = 2.0  # min angular separation between retained candidates
+_CERT_EPS = 1e-7  # safety inset after certification
+_CERT_MAX_SHRINK = 0.2  # max symmetric shrink as fraction of shorter side
+_FALLBACK_INSET_FRACS = (0.002, 0.005, 0.01, 0.02)  # polygon insets for strict fallback
+_BEST_EFFORT_SCALES = (0.95, 0.9, 0.8, 0.65, 0.5, 0.35, 0.2, 0.1, 0.05, 0.02, 0.01)
 
 
 def _polish_angle(poly, candidate, grid_fine, max_ratio):
@@ -483,7 +488,7 @@ def _conservative_inner_fallback(poly, grid_fine, max_ratio, centroid, angles):
     if span <= 0:
         return None, 0.0, None
 
-    for frac in (0.002, 0.005, 0.01, 0.02):
+    for frac in _FALLBACK_INSET_FRACS:
         inner = poly.buffer(-span * frac, cap_style=3, join_style=2)
         if inner.is_empty or inner.area <= 0:
             continue
@@ -552,7 +557,7 @@ def _best_effort_shrink_to_cover(poly, rect, max_ratio, tol=1e-7, max_iter=40):
     # Find any valid lower bound
     lo, hi = 0.0, 1.0
     r_lo = None
-    for s in (0.95, 0.9, 0.8, 0.65, 0.5, 0.35, 0.2, 0.1, 0.05, 0.02, 0.01):
+    for s in _BEST_EFFORT_SCALES:
         r = build(s)
         if r is not None and poly.covers(r):
             lo = s

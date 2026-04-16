@@ -96,6 +96,23 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 - `GRID_*`, `ANGLE_STEP`, `TOP_K`: search density and candidate breadth controls; they change result quality/runtime tradeoff, not the solver family semantics.
 - `N_WORKERS`, `USE_CHUNKING`, `AUTO_INSTALL_NUMBA`: runtime/performance controls only; they do not change geometric guarantees.
 
+### Numba auto-install safety policy
+
+`AUTO_INSTALL_NUMBA` is now conservative by default (`False`) and, when enabled, only attempts installation in safer contexts:
+
+1. isolated Python environment (venv/conda), or
+2. writable user-site install target (falls back to `pip install --user`).
+
+If neither condition is met, auto-install is skipped and a warning is emitted instead of mutating the system interpreter.
+
+### Hard-coded tuning constants
+
+Core solver constants are now centralized as module-level names in worker modules (for example `_PHASE_A_XATOL`, `_PRUNE_MARGIN`, `_HALF_WINDOW_*`, `_EDGE_KERNEL`, `_CERT_*`). This keeps numeric tuning decisions visible and reviewable in one place instead of scattering literals across loops/branches.
+
+### Spatial index evaluation (STRtree)
+
+A spatial index was evaluated for point-in-polygon acceleration. In this plugin's hot path (single polygon against dense, contiguous grid points), vectorized contains remains the default because per-feature STRtree construction overhead usually outweighs gains. STRtree can still be revisited for alternate workloads (many polygons against shared point clouds).
+
 ## Processing benchmark (default settings)
 
 All runs assume default algorithm parameters and Numba installed. 290 and 5406 are the number of features in the testing dataset.
@@ -315,6 +332,7 @@ flowchart TD
 - `LIRiAP_pack/*_worker.py`: geometry solvers independent from QGIS/Qt runtime.
 - `LIRiAP_pack/numba_bootstrap.py`: optional Numba bootstrap helper.
 - `LIRiAP_pack/help_descriptions.py`: shared right-panel algorithm descriptions.
+- `tests/*.py`: unit tests for bootstrap safety, edge cases, and tuning-constant guardrails.
 
 ## Computational complexity (formal analysis)
 

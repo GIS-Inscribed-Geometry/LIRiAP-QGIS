@@ -8,6 +8,9 @@ Stage model (consistent with README):
 2. Local angle polishing around top candidates.
 3. Fine-grid solve at the best angle neighborhood.
 4. Optional output buffer application.
+
+Legacy stage aliases preserved for maintainers:
+S1=coarse candidates, S2=coarse evaluation, S3=fine refinement, S4=buffer/output.
 """
 
 import numpy as np
@@ -16,6 +19,21 @@ from shapely.affinity import rotate
 from shapely.geometry import box, MultiPolygon, Polygon
 from shapely.vectorized import contains as shp_contains
 from shapely.wkb import loads as wkb_loads
+
+# ---------------------------------------------------------------------------
+# Tuning constants
+# ---------------------------------------------------------------------------
+_EDGE_KERNEL = np.array([0.15, 0.25, 0.20, 0.25, 0.15], dtype=np.float64)
+_UPPER_BOUND_FACTOR = 0.5  # convex-shape bound for max inscribed rectangle area
+_HALF_WINDOW_MEDIAN_SCALE = 0.6
+_HALF_WINDOW_MIN = 3.0
+_HALF_WINDOW_MAX = 15.0
+_HALF_WINDOW_FALLBACK = 10.0
+_BRENT_XATOL = 0.3
+
+# NOTE: STRtree was evaluated for this stage. Because each solve performs
+# one polygon-vs-many-grid-points query, vectorized contains remains the
+# default path and usually outperforms building a per-feature spatial index.
 
 try:
     from numba import njit as _njit
@@ -153,8 +171,7 @@ def _edge_candidate_angles(poly, min_sep_deg=4.0, max_candidates=10):
     for ang, wt in zip(angles, lengths):
         bins[min(int(round(ang)), 90)] += wt
 
-    kernel = np.array([0.15, 0.25, 0.20, 0.25, 0.15])
-    bins = np.convolve(bins, kernel, mode='same')
+    bins = np.convolve(bins, _EDGE_KERNEL, mode='same')
 
     sep = max(1, int(min_sep_deg))
     peaks = []
@@ -194,7 +211,7 @@ def _upper_bound(poly, angle, max_ratio):
         upper = bw * bh
 
     # Divide by 2 — provably valid for convex shapes; conservative for general
-    return upper * 0.5
+    return upper * _UPPER_BOUND_FACTOR
 
 
 def _solve_axis_rect(poly, grid_steps, max_ratio):
@@ -252,9 +269,15 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
 
     if len(candidates) >= 2:
         gaps = np.diff(np.sort(candidates))
-        half_window = float(np.clip(np.median(gaps) * 0.6, 3.0, 15.0))
+        half_window = float(
+            np.clip(
+                np.median(gaps) * _HALF_WINDOW_MEDIAN_SCALE,
+                _HALF_WINDOW_MIN,
+                _HALF_WINDOW_MAX,
+            )
+        )
     else:
-        half_window = 10.0
+        half_window = _HALF_WINDOW_FALLBACK
 
     # ── Stage 2: coarse-grid evaluation with early rejection ─────────────────
     # Sort candidates by descending upper-bound so the global best rises fast,
@@ -303,8 +326,12 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
 
     lo = best_angle - half_window
     hi = best_angle + half_window
-    res = minimize_scalar(_neg_area_fine, bounds=(lo, hi),
-                          method='bounded', options={'xatol': 0.3})
+    res = minimize_scalar(
+        _neg_area_fine,
+        bounds=(lo, hi),
+        method='bounded',
+        options={'xatol': _BRENT_XATOL},
+    )
 
     if res.fun < -best_area:
         best_angle = res.x

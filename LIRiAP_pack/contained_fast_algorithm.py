@@ -109,7 +109,7 @@ class InscribedRectangleContainedFast(QgsProcessingAlgorithm):
             self.USE_CHUNKING, self.tr("Enable chunking (parallel mode)"), defaultValue=False
         ))
         self.addParameter(QgsProcessingParameterBoolean(
-            self.AUTO_INSTALL_NUMBA, self.tr("Attempt to install numba if missing"), defaultValue=True
+            self.AUTO_INSTALL_NUMBA, self.tr("Attempt safe numba auto-install if missing"), defaultValue=False
         ))
         self.addParameter(QgsProcessingParameterNumber(
             self.N_WORKERS, self.tr("Workers (0 = auto, 1 = serial, >1 = custom)"),

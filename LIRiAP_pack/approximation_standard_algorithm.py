@@ -95,7 +95,7 @@ class InscribedRectangleApproximationStandard(QgsProcessingAlgorithm):
             self.USE_CHUNKING, "Enable chunking (parallel mode)", defaultValue=False
         ))
         self.addParameter(QgsProcessingParameterBoolean(
-            self.AUTO_INSTALL_NUMBA, "Attempt to install numba if missing", defaultValue=True
+            self.AUTO_INSTALL_NUMBA, "Attempt safe numba auto-install if missing", defaultValue=False
         ))
         self.addParameter(QgsProcessingParameterNumber(
             self.N_WORKERS, "Workers (0 = auto, 1 = serial, >1 = custom)",
