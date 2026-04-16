@@ -339,19 +339,19 @@ flowchart TD
 ### Symbols used in all formulas
 
 
-| Symbol       | Meaning                                                                                       |
-| ------------ | --------------------------------------------------------------------------------------------- |
-| $n$          | Total polygon vertices (exterior + holes).                                                    |
-| $g_{coarse}$ | Coarse grid size (`GRID_COARSE`).                                                             |
-| $g_{fine}$   | Fine grid size (`GRID_FINE`).                                                                 |
-| $k$          | Candidate count kept for refinement (`TOP_K`).                                                |
-| $m$          | Edge-guided initial angle candidates ($\le 12$ in contained/BCRS, $\le 10$ in approximation). |
-| $s_{90}$     | Fallback sweep size:$s_{90}=\lceil 90/a\rceil$, where $a=$ `ANGLE_STEP`.                      |
-| $s_{180}$    | Approximation fallback sweep size:$s_{180}=\lceil 180/a\rceil$, where $a=$ `ANGLE_STEP`.      |
-| $p$          | Brent objective evaluations (`maxiter=60` where explicitly set).                              |
-| $t$          | Stage 4-5 angle trials per candidate ($\le 4$ in BCRS, $\le 2$ in BCRS Fast).                 |
-| $X,Y$        | Unique boundary x/y coordinates after rotation (BCRS grid lines).                             |
-| $\nu$        | BCRS cell count:$\nu=(\lvert X\rvert-1)(\lvert Y\rvert-1)$.                                   |
+| Symbol | Meaning |
+| ------ | ------- |
+| `n` | Total polygon vertices (exterior + holes). |
+| `g_coarse` | Coarse grid size (`GRID_COARSE`). |
+| `g_fine` | Fine grid size (`GRID_FINE`). |
+| `k` | Candidate count kept for refinement (`TOP_K`). |
+| `m` | Edge-guided initial angle candidates (<= 12 in contained/BCRS, <= 10 in approximation). |
+| `s90` | Fallback sweep size: `ceil(90 / a)`, where `a = ANGLE_STEP`. |
+| `s180` | Approximation fallback sweep size: `ceil(180 / a)`, where `a = ANGLE_STEP`. |
+| `p` | Brent objective evaluations (`maxiter=60` where explicitly set). |
+| `t` | Stage 4-5 angle trials per candidate (<= 4 in BCRS, <= 2 in BCRS Fast). |
+| `X, Y` | Unique boundary x/y coordinates after rotation (BCRS grid lines). |
+| `nu` | BCRS cell count: `(|X|-1) * (|Y|-1)`. |
 
 ### Primitive solver costs (from implementation loops)
 
