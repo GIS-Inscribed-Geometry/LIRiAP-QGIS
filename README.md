@@ -6,9 +6,9 @@ LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Proces
 
 Given an input polygon, find a large non axis aligned interior rectangle (concave polygons and polygons with holes supported). In this pack, **three different problem variants** are implemented:
 
-1. **Approximation family**: maximize area quickly, without strict containment certification.
+1. **Approximation family**: maximize area quickly, without strict containment certification. Good for finding candidates
 2. **Contained family**: enforce containment certification, but do not run boundary expansion after certification.
-3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF). This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target.
+3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF). This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target. Best for finding results closer to solves.
 
 ## Result screenshots
 
