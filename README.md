@@ -1,6 +1,6 @@
 # LIRiAP
 
-LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Processing algorithms for computing largest inscribed rectangles approximations for polygon features.
+LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Processing algorithms for computing the largest inscribed rectangles approximations for polygon features.
 
 ## Problem statement
 
