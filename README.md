@@ -10,31 +10,6 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 2. **Contained family**: enforce containment certification, but do not run boundary expansion after certification.
 3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF). This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target.
 
-## At a glance
-
-From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements (time of processing vs accuracy).
-
-
-| Family        | Primary objective                            | Strict containment               | Boundary expansion |
-| ------------- | -------------------------------------------- | -------------------------------- | ------------------ |
-| Approximation | Fast area-focused search                     | No                               | No                 |
-| Contained     | Certified contained rectangle search         | Yes (unless fallback is enabled) | No                 |
-| BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (CABF)         |
-
-Best execution mode by algorithm (@290 @5406 are number of run features in a dataset):
-
-
-| Algorithm                     | Best mode @290 | Best mode @5406 |
-| ----------------------------- | -------------- | --------------- |
-| Approximation Standard        | 12w            | 12w+chunk       |
-| Approximation Fast            | 12w            | 12w+chunk       |
-| Contained Standard (strict)   | 12w+chunk      | 12w             |
-| Contained Standard (fallback) | 12w+chunk      | 12w+chunk       |
-| Contained Fast (fallback)     | 12w+chunk      | 12w+chunk       |
-| BCRS (strict)                 | 1w             | 1w              |
-| BCRS (fallback)               | 1w             | 1w              |
-| BCRS Fast (fallback)          | 1w             | 1w              |
-
 ## Result screenshots
 
 ### Approximation (less vs denser grid)
@@ -63,6 +38,32 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 - **Other scenarios**: map tiling anchors, drone landing-zone preselection, interior ROI extraction for QA workflows, and standardized shape descriptors for downstream analytics.
 
 The less the features the denser the grid can be whilst still maintaining reasonable accuracy.
+
+## At a glance
+
+From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements (time of processing vs accuracy).
+
+
+| Family        | Primary objective                            | Strict containment               | Boundary expansion |
+| ------------- | -------------------------------------------- | -------------------------------- | ------------------ |
+| Approximation | Fast area-focused search                     | No                               | No                 |
+| Contained     | Certified contained rectangle search         | Yes (unless fallback is enabled) | No                 |
+| BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (CABF)         |
+
+Best execution mode by algorithm (@290 @5406 are number of run features in a dataset):
+
+
+| Algorithm                     | Best mode @290 | Best mode @5406 |
+| ----------------------------- | -------------- | --------------- |
+| Approximation Standard        | 12w            | 12w+chunk       |
+| Approximation Fast            | 12w            | 12w+chunk       |
+| Contained Standard (strict)   | 12w+chunk      | 12w             |
+| Contained Standard (fallback) | 12w+chunk      | 12w+chunk       |
+| Contained Fast (fallback)     | 12w+chunk      | 12w+chunk       |
+| BCRS (strict)                 | 1w             | 1w              |
+| BCRS (fallback)               | 1w             | 1w              |
+| BCRS Fast (fallback)          | 1w             | 1w              |
+
 
 ## Shared components
 
