@@ -1,18 +1,18 @@
 # LIRiAP
 
-LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Processing algorithms for computing largest inscribed rectangles for polygon features.
+LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Processing algorithms for computing the largest inscribed rectangles approximations for polygon features.
 
 ## Problem statement
 
-Given an input polygon, find a large non axis aligned interior rectangle (concave polygons and polygons with holes supported). In this plugin, **three different problem variants** are implemented:
+Given an input polygon, find a large non axis aligned interior rectangle (concave polygons and polygons with holes supported). In this pack, **three different problem variants** are implemented:
 
 1. **Approximation family**: maximize area quickly, without strict containment certification.
 2. **Contained family**: enforce containment certification, but do not run boundary expansion after certification.
-3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF). This is the only family in this plugin intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target.
+3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF). This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target.
 
 ## At a glance
 
-From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements.
+From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements (time of processing vs accuracy).
 
 
 | Family        | Primary objective                            | Strict containment               | Boundary expansion |
@@ -55,7 +55,7 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 
 ---
 
-## Uses
+## Potential uses
 
 - **Suitability analysis task scenarios**: search candidate locations for building or infrastructure placement by finding the largest feasible rectangular footprint inside constrained parcels (e.g., houses, warehouses, solar arrays, staging pads, retention structures) while respecting parcel boundaries and holes/exclusions.
 - **Remote sensing scenarios**: derive stable interior rectangular patches for spectral sampling, calibration windows, texture statistics, and object-level summaries where centroid or full-polygon sampling is noisy.
@@ -83,7 +83,7 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 | Approximation Fast                                      | Same as Approximation Standard with lower overhead execution | Not certified; same semantics as Standard                                                               | No expansion stage                                                   |
 | Contained Standard                                      | Certified contained rectangle search                         | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | No expansion stage after certification                               |
 | Contained Fast                                          | Same as Contained Standard with optimized execution          | Same certified/best-effort semantics as Standard                                                        | No expansion stage after certification                               |
-| BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | Includes CABF boundary expansion (full target method in this plugin) |
+| BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | Includes CABF boundary expansion (full target method in this pack) |
 | BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | Includes CABF boundary expansion                                     |
 
 ## Setting semantics (what changes correctness vs only speed)
@@ -111,7 +111,7 @@ Core solver constants are now centralized as module-level names in worker module
 
 ### Spatial index evaluation (STRtree)
 
-A spatial index was evaluated for point-in-polygon acceleration. In this plugin's hot path (single polygon against dense, contiguous grid points), vectorized contains remains the default because per-feature STRtree construction overhead usually outweighs gains. STRtree can still be revisited for alternate workloads (many polygons against shared point clouds).
+A spatial index was evaluated for point-in-polygon acceleration. In this pack's hot path (single polygon against dense, contiguous grid points), vectorized contains remains the default because per-feature STRtree construction overhead usually outweighs gains. STRtree can still be revisited for alternate workloads (many polygons against shared point clouds).
 
 ## Processing benchmark (default settings)
 
@@ -134,7 +134,7 @@ All runs assume default algorithm parameters and Numba installed. 290 and 5406 a
 ### Parallel profile (N_WORKERS=12, USE_CHUNKING=False)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
 | ------- | ---------------------- | ------------------------ | ---------------------------- | --------------- | ------------------------ |
 | P1      | Approximation Standard | n/a                      | 5.97*                        | 112.30          | 18.8107                  |
 | P2      | Approximation Fast     | n/a                      | 5.90*                        | 108.43          | 18.3780                  |
@@ -308,7 +308,7 @@ flowchart TD
    - apply controlled shrink when needed,
    - optional best-effort fallback if strict certification fails and fallback is enabled.
 7. **Stage 7 (selection and output)**: keep best certified candidate, compute ratio/gain/best-effort metadata, and return rectangle.
-8. **Semantics**: this is the only family here that combines contained certification with explicit boundary expansion (CABF), i.e. the full target formulation in this plugin.
+8. **Semantics**: this is the only family here that combines contained certification with explicit boundary expansion (CABF), i.e. the full target formulation in this pack.
 
 ### BCRS Fast
 
