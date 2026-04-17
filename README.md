@@ -8,7 +8,7 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 
 1. **Approximation family**: maximize area quickly, without strict containment certification. Good for finding candidates
 2. **Contained family**: enforce containment certification, but do not run boundary expansion after certification.
-3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF). This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target. Best for finding results closer to solves.
+3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF) - contain & extend. This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target. Best for finding results closer to solves on more limited set of features.
 
 ## Result screenshots
 
@@ -32,8 +32,8 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 
 ## Potential uses
 
-- **Suitability analysis task scenarios**: search candidate locations for building or infrastructure placement by finding the largest feasible rectangular footprint inside constrained parcels (e.g., houses, warehouses, solar arrays, staging pads, retention structures) while respecting parcel boundaries and holes/exclusions.
-- **Remote sensing scenarios**: derive stable interior rectangular patches for spectral sampling, calibration windows, texture statistics, and object-level summaries where centroid or full-polygon sampling is noisy.
+- **Suitability analysis**: search candidate locations for building or infrastructure placement by finding the largest feasible rectangular footprint inside constrained parcels (e.g., houses, warehouses, solar arrays, staging pads, retention structures) while respecting parcel boundaries and holes/exclusions.
+- **Remote sensing**: derive stable interior rectangular patches for spectral sampling, calibration windows, texture statistics, and object-level summaries where centroid or full-polygon sampling is noisy.
 - **Dynamic cartographic label placement**: place labels in the largest interior rectangle instead of using only centroid or bounding box, improving readability in concave polygons and polygons with holes. An axis-aligned version could be fast enough to handle this task.
 - **Other scenarios**: map tiling anchors, drone landing-zone preselection, interior ROI extraction for QA workflows, and standardized shape descriptors for downstream analytics.
 
