@@ -10,7 +10,7 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 2. **Contained family**: enforce containment certification, but do not run boundary expansion after certification.
 3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF) - contain & extend. This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target. Best for finding results closer to solves on more limited set of features.
 
-## Result screenshots
+## Result screenshots (constrained to 16:10 resolution)
 
 ### Approximation (less vs denser grid)
 
