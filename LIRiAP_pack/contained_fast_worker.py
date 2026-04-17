@@ -1,15 +1,15 @@
-# ===========================================================================
-# inscribed_rect_worker.py  ·  v5
-# Pure-geometry worker — no QGIS objects.
-#
-# Pipeline per feature
-# ──────────────────────────────────────────────────────────────────────────
-#   Stage 1  – Edge-guided angle candidates + coarse grid → top-K candidates
-#   Stage 2  – Local angle polishing around each Stage 1 candidate
-#   Stage 3  – Fine-grid solve at polished and original angles
-#   Stage 4  – Explicit containment certification (symmetric shrink fallback)
-#
-# ===========================================================================
+"""
+LIRiAP Contained Fast worker module.
+
+Pure geometry routines used by the corresponding algorithm wrapper.
+No QGIS or Qt runtime dependencies.
+
+Pipeline:
+1. Edge-guided angle candidates with coarse-grid ranking.
+2. Local angle polishing around top candidates.
+3. Fine-grid solve at polished and original angles.
+4. Containment certification with symmetric-shrink fallback.
+"""
 from __future__ import annotations
 
 import math

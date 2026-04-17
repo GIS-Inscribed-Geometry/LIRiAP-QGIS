@@ -4,7 +4,7 @@ LIRiAP BCRS Fast worker module.
 Implements the optimized BCRS/CABF solve path and is intentionally independent
 from QGIS/Qt runtime objects.
 
-Pipeline labels are kept in sync with README:
+Pipeline overview:
 Stage 1 geometry preparation ->
 Stage 2 heuristic candidates ->
 Stage 3 angle refinement ->

@@ -1,16 +1,14 @@
 """
 LIRiAP Approximation Standard worker module.
 
-Pure geometry routines used by the QGIS algorithm wrapper. No QGIS/Qt imports.
+Pure geometry routines used by the corresponding algorithm wrapper.
+No QGIS or Qt runtime dependencies.
 
-Stage model (consistent with README):
+Pipeline:
 1. Edge-guided coarse candidate search.
-2. Local angle polishing around top candidates.
-3. Fine-grid solve at the best angle neighborhood.
-4. Optional output buffer application.
-
-Legacy stage aliases preserved for maintainers:
-S1=coarse candidates, S2=coarse evaluation, S3=fine refinement, S4=buffer/output.
+2. Coarse candidate evaluation with local angle polishing.
+3. Fine-grid solve near the strongest candidate angle.
+4. Optional containment buffer application.
 """
 
 import numpy as np
