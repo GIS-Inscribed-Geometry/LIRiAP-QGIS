@@ -11,8 +11,7 @@ import multiprocessing as _mp
 import os
 import sys
 
-from PyQt5.QtCore import QVariant
-from qgis.PyQt.QtCore import QCoreApplication
+from qgis.PyQt.QtCore import QCoreApplication, QVariant
 from qgis.core import (
     QgsFeature,
     QgsFeatureSink,
