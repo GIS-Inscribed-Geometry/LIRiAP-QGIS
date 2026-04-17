@@ -39,6 +39,10 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 
 The less the features the denser the grid can be whilst still maintaining reasonable accuracy.
 
+### Potential for other algorithms
+
+The ideas in this pack could potentially be used to get solutions for other contained shapes, as well as the reverse problem - finding positions for inscribed polygons in a rectangle in a way that maximizes used space.
+
 ## At a glance
 
 From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements (time of processing vs accuracy).
@@ -87,7 +91,7 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 | BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | Includes CABF boundary expansion (full target method in this pack) |
 | BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | Includes CABF boundary expansion                                     |
 
-## Setting semantics (what changes correctness vs only speed)
+## Setting semantics
 
 - `ALWAYS_RETURN` (Contained/BCRS):
   - `False`: strict certification only; features may return no rectangle if strict containment cannot be certified.
@@ -96,23 +100,6 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 - `MAX_RATIO`: constrains the admissible rectangle aspect ratio; tighter cap can reduce max area.
 - `GRID_*`, `ANGLE_STEP`, `TOP_K`: search density and candidate breadth controls; they change result quality/runtime tradeoff, not the solver family semantics.
 - `N_WORKERS`, `USE_CHUNKING`, `AUTO_INSTALL_NUMBA`: runtime/performance controls only; they do not change geometric guarantees.
-
-### Numba auto-install safety policy
-
-`AUTO_INSTALL_NUMBA` is now conservative by default (`False`) and, when enabled, only attempts installation in safer contexts:
-
-1. isolated Python environment (venv/conda), or
-2. writable user-site install target (falls back to `pip install --user`).
-
-If neither condition is met, auto-install is skipped and a warning is emitted instead of mutating the system interpreter.
-
-### Hard-coded tuning constants
-
-Core solver constants are now centralized as module-level names in worker modules (for example `_PHASE_A_XATOL`, `_PRUNE_MARGIN`, `_HALF_WINDOW_*`, `_EDGE_KERNEL`, `_CERT_*`). This keeps numeric tuning decisions visible and reviewable in one place instead of scattering literals across loops/branches.
-
-### Spatial index evaluation (STRtree)
-
-A spatial index was evaluated for point-in-polygon acceleration. In this pack's hot path (single polygon against dense, contiguous grid points), vectorized contains remains the default because per-feature STRtree construction overhead usually outweighs gains. STRtree can still be revisited for alternate workloads (many polygons against shared point clouds).
 
 ## Processing benchmark (default settings)
 
@@ -440,7 +427,7 @@ Using $p=60$, $k=1$ effective for Approximation, $k=3$ for Contained/BCRS, $t\le
 | BCRS                          | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 4\cdot(14400 + 89401)) \approx 1581612$ plus certification/CABF geometry cost |
 | BCRS Fast                     | $(12+18)\cdot1600 + 3\cdot((60+4)\cdot1600 + 2\cdot89401) \approx 891606$ plus certification/CABF geometry cost        |
 
-These are complexity-weighted operation counts, not wall-clock predictions.
+Mind that these are complexity-weighted operation counts, not wall-clock predictions.
 
 ### Verification test: expected relations vs wall-clock times
 
@@ -459,8 +446,4 @@ Using baseline 5406-feature wall times (`N_WORKERS=1`, no chunking):
 | BCRS Fast vs BCRS              | Fast should be lower                 | $445.01s < 772.05s$    | consistent |
 | Contained Standard vs BCRS     | model estimate favors BCRS           | $574.13s < 772.05s$    | mismatch   |
 
-This confirms the model captures intra-family speed relations well; cross-family ordering can remain sensitive to solver semantics, settings, and constant factors not captured by asymptotic terms.
-
-### Assumption note (certification/GEOS cost model)
-
-Certification and shrink terms are reported in a geometry-size-sensitive worst-case model (written with $n$-dependent terms). In real runs, prepared-geometry predicates are opaque GEOS calls and can behave closer to near-constant time on favorable inputs. For BCRS Fast, CABF clamping uses `searchsorted` (a $O(\log n)$ component), but it is asymptotically dominated by the included $O(n)$ geometry-check term in this worst-case model.
+The model seems to capture intra-family speed relations well; cross-family ordering can remain sensitive to solver semantics, settings, and constant factors not captured by asymptotic terms.
