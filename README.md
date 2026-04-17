@@ -6,9 +6,42 @@ LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Proces
 
 Given an input polygon, find a large non axis aligned interior rectangle (concave polygons and polygons with holes supported). In this pack, **three different problem variants** are implemented:
 
-1. **Approximation family**: maximize area quickly, without strict containment certification.
+1. **Approximation family**: maximize area quickly, without strict containment certification. Good for finding candidates
 2. **Contained family**: enforce containment certification, but do not run boundary expansion after certification.
-3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF). This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target.
+3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF) - contain & extend. This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target. Best for finding results closer to solves on more limited set of features.
+
+## Result screenshots (constrained to 16:10 resolution)
+
+### Approximation (less vs denser grid)
+
+![Approximation result](media/Approximate.png)
+
+![Approximation (improved candidate)](media/Approximate_better.png)
+
+### Contained
+
+![Contained result](media/Contained.png)
+
+### BCRS (Boundary-Coordinate Raster Solve)
+
+![BCRS result](media/BCRS.png)
+
+![BCRS result (zoom)](media/BCRS_zoom.png)
+
+---
+
+## Potential uses
+
+- **Suitability analysis**: search candidate locations for building or infrastructure placement by finding the largest feasible rectangular footprint inside constrained parcels (e.g., houses, warehouses, solar arrays, staging pads, retention structures) while respecting parcel boundaries and holes/exclusions.
+- **Remote sensing**: derive stable interior rectangular patches for spectral sampling, calibration windows, texture statistics, and object-level summaries where centroid or full-polygon sampling is noisy.
+- **Dynamic cartographic label placement**: place labels in the largest interior rectangle instead of using only centroid or bounding box, improving readability in concave polygons and polygons with holes. An axis-aligned version could be fast enough to handle this task.
+- **Other scenarios**: map tiling anchors, drone landing-zone preselection, interior ROI extraction for QA workflows, and standardized shape descriptors for downstream analytics.
+
+The less the features the denser the grid can be whilst still maintaining reasonable accuracy.
+
+### Potential for other algorithms
+
+The ideas in this pack could potentially be used to get solutions for other contained shapes, as well as the reverse problem - finding positions for inscribed polygons in a rectangle in a way that maximizes used space.
 
 ## At a glance
 
@@ -35,34 +68,6 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 | BCRS (fallback)               | 1w             | 1w              |
 | BCRS Fast (fallback)          | 1w             | 1w              |
 
-## Result screenshots
-
-### Approximation (less vs denser grid)
-
-![Approximation result](media/Approximate.png)
-
-![Approximation (improved candidate)](media/Approximate_better.png)
-
-### Contained
-
-![Contained result](media/Contained.png)
-
-### BCRS (Boundary-Coordinate Raster Solve)
-
-![BCRS result](media/BCRS.png)
-
-![BCRS result (zoom)](media/BCRS_zoom.png)
-
----
-
-## Potential uses
-
-- **Suitability analysis task scenarios**: search candidate locations for building or infrastructure placement by finding the largest feasible rectangular footprint inside constrained parcels (e.g., houses, warehouses, solar arrays, staging pads, retention structures) while respecting parcel boundaries and holes/exclusions.
-- **Remote sensing scenarios**: derive stable interior rectangular patches for spectral sampling, calibration windows, texture statistics, and object-level summaries where centroid or full-polygon sampling is noisy.
-- **Dynamic cartographic label placement**: place labels in the largest interior rectangle instead of using only centroid or bounding box, improving readability in concave polygons and polygons with holes.
-- **Other scenarios**: map tiling anchors, drone landing-zone preselection, interior ROI extraction for QA workflows, and standardized shape descriptors for downstream analytics.
-
-The less the features the denser the grid can be whilst still maintaining reasonable accuracy.
 
 ## Shared components
 
@@ -86,7 +91,7 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 | BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | Includes CABF boundary expansion (full target method in this pack) |
 | BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | Includes CABF boundary expansion                                     |
 
-## Setting semantics (what changes correctness vs only speed)
+## Setting semantics
 
 - `ALWAYS_RETURN` (Contained/BCRS):
   - `False`: strict certification only; features may return no rectangle if strict containment cannot be certified.
@@ -95,23 +100,6 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 - `MAX_RATIO`: constrains the admissible rectangle aspect ratio; tighter cap can reduce max area.
 - `GRID_*`, `ANGLE_STEP`, `TOP_K`: search density and candidate breadth controls; they change result quality/runtime tradeoff, not the solver family semantics.
 - `N_WORKERS`, `USE_CHUNKING`, `AUTO_INSTALL_NUMBA`: runtime/performance controls only; they do not change geometric guarantees.
-
-### Numba auto-install safety policy
-
-`AUTO_INSTALL_NUMBA` is now conservative by default (`False`) and, when enabled, only attempts installation in safer contexts:
-
-1. isolated Python environment (venv/conda), or
-2. writable user-site install target (falls back to `pip install --user`).
-
-If neither condition is met, auto-install is skipped and a warning is emitted instead of mutating the system interpreter.
-
-### Hard-coded tuning constants
-
-Core solver constants are now centralized as module-level names in worker modules (for example `_PHASE_A_XATOL`, `_PRUNE_MARGIN`, `_HALF_WINDOW_*`, `_EDGE_KERNEL`, `_CERT_*`). This keeps numeric tuning decisions visible and reviewable in one place instead of scattering literals across loops/branches.
-
-### Spatial index evaluation (STRtree)
-
-A spatial index was evaluated for point-in-polygon acceleration. In this pack's hot path (single polygon against dense, contiguous grid points), vectorized contains remains the default because per-feature STRtree construction overhead usually outweighs gains. STRtree can still be revisited for alternate workloads (many polygons against shared point clouds).
 
 ## Processing benchmark (default settings)
 
@@ -439,7 +427,7 @@ Using $p=60$, $k=1$ effective for Approximation, $k=3$ for Contained/BCRS, $t\le
 | BCRS                          | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 4\cdot(14400 + 89401)) \approx 1581612$ plus certification/CABF geometry cost |
 | BCRS Fast                     | $(12+18)\cdot1600 + 3\cdot((60+4)\cdot1600 + 2\cdot89401) \approx 891606$ plus certification/CABF geometry cost        |
 
-These are complexity-weighted operation counts, not wall-clock predictions.
+Mind that these are complexity-weighted operation counts, not wall-clock predictions.
 
 ### Verification test: expected relations vs wall-clock times
 
@@ -458,8 +446,4 @@ Using baseline 5406-feature wall times (`N_WORKERS=1`, no chunking):
 | BCRS Fast vs BCRS              | Fast should be lower                 | $445.01s < 772.05s$    | consistent |
 | Contained Standard vs BCRS     | model estimate favors BCRS           | $574.13s < 772.05s$    | mismatch   |
 
-This confirms the model captures intra-family speed relations well; cross-family ordering can remain sensitive to solver semantics, settings, and constant factors not captured by asymptotic terms.
-
-### Assumption note (certification/GEOS cost model)
-
-Certification and shrink terms are reported in a geometry-size-sensitive worst-case model (written with $n$-dependent terms). In real runs, prepared-geometry predicates are opaque GEOS calls and can behave closer to near-constant time on favorable inputs. For BCRS Fast, CABF clamping uses `searchsorted` (a $O(\log n)$ component), but it is asymptotically dominated by the included $O(n)$ geometry-check term in this worst-case model.
+The model seems to capture intra-family speed relations well; cross-family ordering can remain sensitive to solver semantics, settings, and constant factors not captured by asymptotic terms.
