@@ -1,0 +1,16 @@
+[general]
+name=LIRiAP
+description=Largest Inscribed Rectangle in Arbitrary Polygon - Provides algorithms for computing largest inscribed rectangles for polygon features.
+category=Vector
+version=1.0.0
+qgisMinimumVersion=3.16
+qgisMaximumVersion=4.99
+author=Wolren
+email=nerlow@outlook.com
+icon=icon.png
+repository=https://github.com/wolren/LIRiAP
+tags=geometry,rectangle,inscribed,polygon,analysis
+help=https://github.com/wolren/LIRiAP#readme
+
+[features]
+flagDefault=0

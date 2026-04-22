@@ -68,7 +68,6 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 | BCRS (fallback)               | 1w             | 1w              |
 | BCRS Fast (fallback)          | 1w             | 1w              |
 
-
 ## Shared components
 
 All algorithms in `LIRiAP_pack` follow the same structure:
@@ -82,14 +81,14 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 ## Algorithms
 
 
-| Algorithm                                               | What problem it solves                                       | Containment semantics                                                                                   | Expansion semantics                                                  |
-| ------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Approximation Standard                                  | Fast area-focused approximation                              | Not certified; rectangle can violate containment in difficult cases                                     | No expansion stage                                                   |
-| Approximation Fast                                      | Same as Approximation Standard with lower overhead execution | Not certified; same semantics as Standard                                                               | No expansion stage                                                   |
-| Contained Standard                                      | Certified contained rectangle search                         | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | No expansion stage after certification                               |
-| Contained Fast                                          | Same as Contained Standard with optimized execution          | Same certified/best-effort semantics as Standard                                                        | No expansion stage after certification                               |
+| Algorithm                                               | What problem it solves                                       | Containment semantics                                                                                   | Expansion semantics                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Approximation Standard                                  | Fast area-focused approximation                              | Not certified; rectangle can violate containment in difficult cases                                     | No expansion stage                                                 |
+| Approximation Fast                                      | Same as Approximation Standard with lower overhead execution | Not certified; same semantics as Standard                                                               | No expansion stage                                                 |
+| Contained Standard                                      | Certified contained rectangle search                         | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | No expansion stage after certification                             |
+| Contained Fast                                          | Same as Contained Standard with optimized execution          | Same certified/best-effort semantics as Standard                                                        | No expansion stage after certification                             |
 | BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | Includes CABF boundary expansion (full target method in this pack) |
-| BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | Includes CABF boundary expansion                                     |
+| BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | Includes CABF boundary expansion                                   |
 
 ## Setting semantics
 
@@ -104,6 +103,11 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 ## Processing benchmark (default settings)
 
 All runs assume default algorithm parameters and Numba installed. 290 and 5406 are the number of features in the testing dataset.
+
+Benchmarked with:
+
+- i5-12400F
+- 32GB DDR4 RAM
 
 ### Baseline profile (N_WORKERS=1, USE_CHUNKING=False)
 
@@ -123,15 +127,15 @@ All runs assume default algorithm parameters and Numba installed. 290 and 5406 a
 
 
 | Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ------------------------ | ---------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | n/a                      | 5.97*                        | 112.30          | 18.8107                  |
-| P2      | Approximation Fast     | n/a                      | 5.90*                        | 108.43          | 18.3780                  |
-| P3      | Contained Standard     | False (strict)           | 22.27                        | 405.91          | 18.2268                  |
-| P4      | Contained Standard     | True (fallback enabled)  | 22.05                        | 410.21          | 18.6036                  |
-| P5      | Contained Fast         | True (fallback enabled) | 12.03*                       | 224.82          | 18.6883                  |
-| P6      | BCRS                   | False (strict)           | 51.83                        | 925.01          | 17.8470                  |
-| P7      | BCRS                   | True (fallback enabled)  | 50.88                        | 941.69          | 18.5081                  |
-| P8      | BCRS Fast              | True (fallback enabled)  | 29.84                        | 557.11          | 18.6699                  |
+| ------- | ---------------------- | ------------------------ | ---------------------------------- | --------------- | ------------------------ |
+| P1      | Approximation Standard | n/a                      | 5.97*                              | 112.30          | 18.8107                  |
+| P2      | Approximation Fast     | n/a                      | 5.90*                              | 108.43          | 18.3780                  |
+| P3      | Contained Standard     | False (strict)           | 22.27                              | 405.91          | 18.2268                  |
+| P4      | Contained Standard     | True (fallback enabled)  | 22.05                              | 410.21          | 18.6036                  |
+| P5      | Contained Fast         | True (fallback enabled) | 12.03*                             | 224.82          | 18.6883                  |
+| P6      | BCRS                   | False (strict)           | 51.83                              | 925.01          | 17.8470                  |
+| P7      | BCRS                   | True (fallback enabled)  | 50.88                              | 941.69          | 18.5081                  |
+| P8      | BCRS Fast              | True (fallback enabled)  | 29.84                              | 557.11          | 18.6699                  |
 
 ### Parallel + chunking profile (N_WORKERS=12, USE_CHUNKING=True)
 
@@ -327,19 +331,19 @@ flowchart TD
 ### Symbols used in all formulas
 
 
-| Symbol | Meaning |
-| ------ | ------- |
-| `n` | Total polygon vertices (exterior + holes). |
-| `g_coarse` | Coarse grid size (`GRID_COARSE`). |
-| `g_fine` | Fine grid size (`GRID_FINE`). |
-| `k` | Candidate count kept for refinement (`TOP_K`). |
-| `m` | Edge-guided initial angle candidates (<= 12 in contained/BCRS, <= 10 in approximation). |
-| `s90` | Fallback sweep size: `ceil(90 / a)`, where `a = ANGLE_STEP`. |
-| `s180` | Approximation fallback sweep size: `ceil(180 / a)`, where `a = ANGLE_STEP`. |
-| `p` | Brent objective evaluations (`maxiter=60` where explicitly set). |
-| `t` | Stage 4-5 angle trials per candidate (<= 4 in BCRS, <= 2 in BCRS Fast). |
-| `X, Y` | Unique boundary x/y coordinates after rotation (BCRS grid lines). |
-| `nu` | BCRS cell count: `(|X|-1) * (|Y|-1)`. |
+| Symbol     | Meaning                                                                                 |
+| ---------- | --------------------------------------------------------------------------------------- |
+| `n`        | Total polygon vertices (exterior + holes).                                              |
+| `g_coarse` | Coarse grid size (`GRID_COARSE`).                                                       |
+| `g_fine`   | Fine grid size (`GRID_FINE`).                                                           |
+| `k`        | Candidate count kept for refinement (`TOP_K`).                                          |
+| `m`        | Edge-guided initial angle candidates (<= 12 in contained/BCRS, <= 10 in approximation). |
+| `s90`      | Fallback sweep size:`ceil(90 / a)`, where `a = ANGLE_STEP`.                             |
+| `s180`     | Approximation fallback sweep size:`ceil(180 / a)`, where `a = ANGLE_STEP`.              |
+| `p`        | Brent objective evaluations (`maxiter=60` where explicitly set).                        |
+| `t`        | Stage 4-5 angle trials per candidate (<= 4 in BCRS, <= 2 in BCRS Fast).                 |
+| `X, Y`     | Unique boundary x/y coordinates after rotation (BCRS grid lines).                       |
+| `nu`       | BCRS cell count: `(                                                                     |
 
 ### Primitive solver costs (from implementation loops)
 
