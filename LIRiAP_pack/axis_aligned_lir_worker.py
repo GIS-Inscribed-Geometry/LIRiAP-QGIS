@@ -75,18 +75,8 @@ References
   Computational Geometry*.
 * This module's LIR context: LIRiAP bcrs_worker.py (same plugin).
 """
+
 from __future__ import annotations
-
-_RUST_CALLS = 0
-_PYTHON_CALLS = 0
-
-try:
-    from lir_rust_shim import solve_lir_shim
-    _RUST_BACKEND = True
-except Exception as e:
-    solve_lir_shim = None
-    _RUST_BACKEND = False
-    _RUST_IMPORT_ERROR = repr(e)
 
 import math
 from typing import Optional, Tuple
@@ -149,10 +139,7 @@ except ImportError:
 _CERT_EPS = 1e-8            # Epsilon inset for floating-point certification
 _VERTEX_COORD_CAP = 500     # Max unique vertex coords per axis before fallback
 _UNIFORM_FALLBACK_N = 500   # Uniform fallback grid size when cap exceeded
-_REFINE_BINARY_STEPS = 44      # 44 is enough; slightly cheaper than 52
-_REFINE_ITERATIONS   = 2       # keeps side-coupling fix
-_ROTATE_IDENTITY_EPS = 1e-12   # for axis_angle % 180 shortcut
-_RATIO_TOL           = 1e-9    # tolerance for refinement ratio checks
+
 
 # --------------------------------------------------------------------------
 # Rect-to-polygon clipping helper
@@ -1131,23 +1118,8 @@ def _certify_rect(
 # ③.5  BOUNDARY-PUSH REFINEMENT  (post-grid diagonal-edge gap correction)
 # ==========================================================================
 
-def _ratio_ok_bounds(
-    x0: float, y0: float, x1: float, y1: float, max_ratio: float
-) -> bool:
-    """
-    Tolerant aspect-ratio test used during boundary-push refinement.
-
-    Accepts candidates whose long:short ratio is within a tiny floating-point
-    tolerance of *max_ratio*. This prevents binary-search oscillation where a
-    mathematically valid candidate is rejected because of sub-ulp noise.
-    """
-    if max_ratio <= 0.0:
-        return True
-    w = x1 - x0
-    h = y1 - y0
-    if w <= 0.0 or h <= 0.0:
-        return False
-    return max(w, h) / min(w, h) <= max_ratio + _RATIO_TOL
+_REFINE_BINARY_STEPS = 52   # ~15 significant digits precision; ~5e-16 relative
+_REFINE_ITERATIONS   = 2    # 1 pass corrects diagonal gaps; 2nd catches coupled sides
 
 def _refine_rect_to_boundary(
     poly: Polygon,
@@ -1200,8 +1172,6 @@ def _refine_rect_to_boundary(
 
     def _ok(cx0, cy0, cx1, cy1):
         if cx0 >= cx1 or cy0 >= cy1:
-            return False
-        if not _ratio_ok_bounds(cx0, cy0, cx1, cy1, max_ratio):
             return False
         r = box(cx0, cy0, cx1, cy1)
         return pp.covers(r) if pp is not None else poly.covers(r)
@@ -1424,40 +1394,6 @@ def _solve_axis_aligned_lir(
     buf_enabled: bool,
     buf_value: float,
 ) -> Tuple[Optional[Polygon], float, float, str, float, bool]:
-    global _RUST_CALLS, _PYTHON_CALLS
-
-    if _RUST_BACKEND and solve_lir_shim is not None:
-        _RUST_CALLS += 1
-        return solve_lir_shim(
-            poly,
-            axis_angle,
-            grid_fine,
-            max_ratio,
-            always_return,
-            buf_enabled,
-            buf_value,
-        )
-
-    _PYTHON_CALLS += 1
-    return _solve_axis_aligned_lir_python(
-        poly,
-        axis_angle,
-        grid_fine,
-        max_ratio,
-        always_return,
-        buf_enabled,
-        buf_value,
-    )
-
-def _solve_axis_aligned_lir_python(
-    poly: Polygon,
-    axis_angle: float,
-    grid_fine: int,
-    max_ratio: float,
-    always_return: bool,
-    buf_enabled: bool,
-    buf_value: float,
-) -> Tuple[Optional[Polygon], float, float, str, float, bool]:
     """
     Solve for the largest inscribed rectangle that is axis-aligned in the
     frame rotated by *axis_angle* degrees, using the exact algorithm
@@ -1512,41 +1448,15 @@ def _solve_axis_aligned_lir_python(
     used_best_effort : bool
         True when the result was produced by the shrink fallback.
     """
-    global _RUST_CALLS, _PYTHON_CALLS
-
-    if _RUST_BACKEND and solve_lir_shim is not None:
-        _RUST_CALLS += 1
-        return solve_lir_shim(
-            poly,
-            axis_angle,
-            grid_fine,
-            max_ratio,
-            always_return,
-            buf_enabled,
-            buf_value,
-        )
-
-    _PYTHON_CALLS += 1
-    # existing Python implementation
-
     centroid = poly.centroid
 
     # Step 1 — classify
     poly_type = _detect_polygon_type(poly)
 
     # Step 2 — rotate into solve frame
-    _angle_mod = axis_angle % 180.0
-    _is_identity = (
-            _angle_mod < _ROTATE_IDENTITY_EPS
-            or abs(_angle_mod - 180.0) < _ROTATE_IDENTITY_EPS
+    rot_poly: Polygon = shp_rotate(
+        poly, -axis_angle, origin=centroid, use_radians=False
     )
-
-    if _is_identity:
-        rot_poly: Polygon = poly
-    else:
-        rot_poly: Polygon = shp_rotate(
-            poly, -axis_angle, origin=centroid, use_radians=False
-        )
 
     # Step 3 — exact solve
     if poly_type == "convex_no_holes":
@@ -1560,37 +1470,31 @@ def _solve_axis_aligned_lir_python(
     # The LRH grid snaps sides to vertex coordinates; the true optimum may have
     # sides on diagonal polygon edges (Daniels theorem: only 2 sides guaranteed at
     # vertex coords).  Push all 4 sides outward to recover the exact solution.
-    prep_rot = None
-    try:
-        prep_rot = shp_prep(rot_poly)
-    except Exception:
-        prep_rot = None
-
     if poly_type != "convex_no_holes" and best_rect_rot is not None:
+        try:
+            prep_rot = shp_prep(rot_poly)
+        except Exception:
+            prep_rot = None
         refined_rot, refined_area = _refine_rect_to_boundary(
             rot_poly, best_rect_rot, max_ratio, prep_rot
         )
-        if refined_rot is not None and refined_area > best_area:
+        if refined_area > best_area:
             best_rect_rot, best_area = refined_rot, refined_area
 
     if best_rect_rot is None or best_area <= 0.0:
         return None, 0.0, axis_angle, poly_type, 1.0, False
 
     # Step 4 — rotate result back to world frame
-    if _is_identity:
-        best_rect_world: Polygon = best_rect_rot
-    else:
-        best_rect_world: Polygon = shp_rotate(
-            best_rect_rot, axis_angle, origin=centroid, use_radians=False
-        )
+    best_rect_world: Polygon = shp_rotate(
+        best_rect_rot, axis_angle, origin=centroid, use_radians=False
+    )
 
     # Step 5 — epsilon-inset certification
-    prepared_poly = prep_rot if _is_identity else None
-    if prepared_poly is None:
-        try:
-            prepared_poly = shp_prep(poly)
-        except Exception:
-            pass
+    prepared_poly = None
+    try:
+        prepared_poly = shp_prep(poly)
+    except Exception:
+        pass
 
     final_rect, final_area = _certify_rect(
         poly, best_rect_world, max_ratio, buf_enabled, buf_value, prepared_poly
@@ -1683,7 +1587,7 @@ def _worker_process_feature(args: tuple) -> Optional[tuple]:
         if poly is None or poly.is_empty:
             return None
 
-        rect, area, ang, poly_type, ratio, used_best_effort = _solve_axis_aligned_lir_python(
+        rect, area, ang, poly_type, ratio, used_best_effort = _solve_axis_aligned_lir(
             poly,
             axis_angle=axis_angle,
             grid_fine=grid_fine,
