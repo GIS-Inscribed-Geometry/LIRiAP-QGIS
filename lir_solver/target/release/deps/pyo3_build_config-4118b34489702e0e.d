@@ -1,0 +1,14 @@
+C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\deps\pyo3_build_config-4118b34489702e0e.d: C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\lib.rs C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\errors.rs C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\impl_.rs C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\build\pyo3-build-config-50d6537c6c8f2a48\out/pyo3-build-config-file.txt C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\build\pyo3-build-config-50d6537c6c8f2a48\out/pyo3-build-config.txt
+
+C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\deps\libpyo3_build_config-4118b34489702e0e.rlib: C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\lib.rs C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\errors.rs C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\impl_.rs C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\build\pyo3-build-config-50d6537c6c8f2a48\out/pyo3-build-config-file.txt C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\build\pyo3-build-config-50d6537c6c8f2a48\out/pyo3-build-config.txt
+
+C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\deps\libpyo3_build_config-4118b34489702e0e.rmeta: C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\lib.rs C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\errors.rs C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\impl_.rs C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\build\pyo3-build-config-50d6537c6c8f2a48\out/pyo3-build-config-file.txt C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\build\pyo3-build-config-50d6537c6c8f2a48\out/pyo3-build-config.txt
+
+C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\lib.rs:
+C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\errors.rs:
+C:\Users\Wildbot\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pyo3-build-config-0.22.6\src\impl_.rs:
+C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\build\pyo3-build-config-50d6537c6c8f2a48\out/pyo3-build-config-file.txt:
+C:\Users\Wildbot\PycharmProjects\LIRiAP\lir_solver\target\release\build\pyo3-build-config-50d6537c6c8f2a48\out/pyo3-build-config.txt:
+
+# env-dep:CARGO_PKG_VERSION=0.22.6
+# env-dep:OUT_DIR=C:\\Users\\Wildbot\\PycharmProjects\\LIRiAP\\lir_solver\\target\\release\\build\\pyo3-build-config-50d6537c6c8f2a48\\out

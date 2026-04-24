@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "lir_solver"
+version = "0.1.0"
+description = "Largest Inscribed Rectangle — Rust/PyO3 extension"
+requires-python = ">=3.9"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python_pkg"
+module-name = "lir_solver.lir_solver"

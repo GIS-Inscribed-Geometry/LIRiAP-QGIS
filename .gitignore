@@ -38,3 +38,5 @@ Thumbs.db
 
 # Folders
 /archive/
+/lir_solver/target/
+/lir_solver/.venv/

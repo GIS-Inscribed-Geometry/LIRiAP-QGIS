@@ -1,0 +1,19 @@
+[package]
+name = "lir_solver"
+version = "0.1.0"
+edition = "2021"
+description = "Largest Inscribed Rectangle solver — PyO3 extension"
+
+[lib]
+name = "lir_solver"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1
+panic         = "abort"
+strip         = true
