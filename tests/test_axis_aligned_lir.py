@@ -45,9 +45,10 @@ def _make_hexagon(r: float = 10.0) -> Polygon:
     raw = Polygon(zip(np.cos(t) * r, np.sin(t) * r))
     return _set_precision(raw, grid_size=1e-9, mode="valid_output")
 
-sys.path.insert(0, __file__.replace("/tests/test_axis_aligned_lir.py", "/LIRiAP_pack"))
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "LIRiAP_pack"))
 
-from archive.axis_aligned_lir_worker import (
+from axis_aligned_lir_worker import (
     _detect_polygon_type,
     _exact_solve_convex,
     _exact_solve_vertex_grid,
