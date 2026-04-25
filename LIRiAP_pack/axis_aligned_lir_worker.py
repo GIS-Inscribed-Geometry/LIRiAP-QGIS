@@ -136,7 +136,8 @@ except ImportError:
 # --------------------------------------------------------------------------
 # Tuning constants
 # --------------------------------------------------------------------------
-_CERT_EPS = 1e-8            # Epsilon inset for floating-point certification
+CERT_EPS = 1e-5            # Epsilon inset for floating-point certification
+_CERT_EPS_TINY = 1e-3     # Larger epsilon for tiny polygons (area < 1)
 _VERTEX_COORD_CAP = 500     # Max unique vertex coords per axis before fallback
 _UNIFORM_FALLBACK_N = 500   # Uniform fallback grid size when cap exceeded
 
@@ -372,11 +373,30 @@ def _exact_solve_convex(poly: Polygon, max_ratio: float) -> Tuple[Optional[Polyg
     # Candidate y-lines: by the Alt/Amenta convex theorem, the optimal
     # axis-aligned rectangle has its top and bottom sides at vertex
     # y-coordinates, so enumerating all O(n^2) pairs of vertex y-values is
-    # exhaustive.  Interior y-sampling is mathematically unnecessary.
+    # exhaustive.  However, for degenerate polygons where only vertex y's give
+    # degenerate slabs (e.g. right triangle), we also sample interior points.
     # For near-degenerate cases where only one side is at a vertex-y (e.g.
     # isosceles triangles), the ternary-search refinement below handles
     # sub-vertex accuracy.
-    ys_all = ys_vertex
+    ys_all = list(ys_vertex)
+
+    # Add interior y-samples if all slabs are degenerate (prevents zero-width at vertices)
+    # Sample a few interior points between min/max y
+    if len(ys_all) <= 2:
+        min_y, max_y = coords[:, 1].min(), coords[:, 1].max()
+        # Add midpoints between consecutive vertices as fallback candidates
+        for i in range(len(coords)):
+            y0 = coords[i, 1]
+            y1 = coords[(i + 1) % len(coords), 1]
+            if y0 != y1:
+                mid = 0.5 * (y0 + y1)
+                if min_y < mid < max_y:
+                    ys_all.append(mid)
+        if len(ys_all) <= 2:
+            ys_all = np.array([min_y, 0.5 * (min_y + max_y), max_y])
+        else:
+            ys_all = np.unique(np.array(ys_all))
+    ys_all = np.array(ys_all)
 
     def x_extent_at_y(y: float):
         """
@@ -560,7 +580,7 @@ def _exact_solve_convex(poly: Polygon, max_ratio: float) -> Tuple[Optional[Polyg
                 return float(clipped.area), clipped
             # Try a tiny inset on the rect to cover FP noise
             try:
-                inset = cand_t.buffer(-_CERT_EPS * 10, cap_style=3, join_style=2)
+                inset = cand_t.buffer(-CERT_EPS * 10, cap_style=3, join_style=2)
                 if not inset.is_empty and poly.covers(inset):
                     return float(inset.area), inset
             except Exception:
@@ -1030,46 +1050,11 @@ def _certify_rect(
     buf_value: float,
     prepared_poly=None,
 ) -> Tuple[Optional[Polygon], float]:
-    """
-    Verify that *rect* is fully contained in *poly* and apply a tiny
-    epsilon inset if GEOS floating-point noise causes a marginal failure.
-
-    Unlike the BCRS worker's ``_certify_and_adjust``, **no iterative
-    binary-search shrink** is performed: the exact solvers produce rectangles
-    whose sides are aligned to polygon vertex coordinates, so containment
-    failures are exclusively sub-femtometre GEOS artefacts fixable by a
-    single fixed epsilon inset.
-
-    **Inset strategy**:
-    If ``poly.covers(rect)`` fails, shrink *rect* symmetrically by
-    ``_CERT_EPS`` on all four sides from its centre.  If the inseted
-    rectangle still fails, the feature is rejected (returns ``None``).
-    This is deliberately conservative: an inset of 1e-8 map units is
-    invisible in any practical CRS but eliminates all floating-point
-    boundary grazing.
-
-    An optional buffer (*buf_enabled*, *buf_value*) is applied after a
-    successful certification to allow deliberate safety margins.  Negative
-    buffer values shrink the result; positive values grow it (use with care
-    — a growing buffer may violate containment and the resulting geometry is
-    not re-certified).
-
-    Parameters
-    ----------
-    poly : shapely.geometry.Polygon
-    rect : shapely.geometry.Polygon or None
-    max_ratio : float
-    buf_enabled : bool
-    buf_value : float
-    prepared_poly : shapely.prepared.PreparedGeometry or None
-
-    Returns
-    -------
-    (final_rect, area) : tuple
-        ``(None, 0.0)`` when certification fails after epsilon inset.
-    """
     if rect is None or rect.is_empty:
         return None, 0.0
+
+    poly_area = poly.area
+    eps = _CERT_EPS_TINY if poly_area < 1.0 else CERT_EPS
 
     prep = prepared_poly
     if prep is None:
@@ -1087,11 +1072,9 @@ def _certify_rect(
     if _covers(rect):
         final = rect
     else:
-        # Single epsilon inset on the actual rectangle geometry (preserves rotation).
-        # We use a negative buffer with flat cap/join so the shape stays rectangular.
-        # This is correct for both axis-aligned and rotated rectangles.
+        # Single epsilon inset (larger for tiny polygons)
         try:
-            inseted = rect.buffer(-_CERT_EPS, cap_style=3, join_style=2)
+            inseted = rect.buffer(-eps, cap_style=3, join_style=2)
         except Exception:
             inseted = None
         if inseted is None or inseted.is_empty or inseted.area <= 0.0:
@@ -1110,7 +1093,6 @@ def _certify_rect(
             pass
 
     return final, float(final.area)
-
 
 
 
@@ -1181,7 +1163,7 @@ def _refine_rect_to_boundary(
 
     # Sanity: starting rect must be inside poly (it always should be)
     if not _ok(x0, y0, x1, y1):
-        eps = _CERT_EPS
+        eps = CERT_EPS
         if not _ok(x0 + eps, y0 + eps, x1 - eps, y1 - eps):
             return rect, float(rect.area)
         x0, y0, x1, y1 = x0 + eps, y0 + eps, x1 - eps, y1 - eps
@@ -1234,7 +1216,7 @@ def _refine_rect_to_boundary(
     refined = box(x0, y0, x1, y1)
     if not poly.covers(refined):
         # Floating-point edge case: final rect grazes boundary. Inset by eps.
-        refined = box(x0 + _CERT_EPS, y0 + _CERT_EPS, x1 - _CERT_EPS, y1 - _CERT_EPS)
+        refined = box(x0 + CERT_EPS, y0 + CERT_EPS, x1 - CERT_EPS, y1 - CERT_EPS)
         if refined.is_empty or not poly.covers(refined):
             return rect, float(rect.area)
         area_new = float(refined.area)
@@ -1470,7 +1452,8 @@ def _solve_axis_aligned_lir(
     # The LRH grid snaps sides to vertex coordinates; the true optimum may have
     # sides on diagonal polygon edges (Daniels theorem: only 2 sides guaranteed at
     # vertex coords).  Push all 4 sides outward to recover the exact solution.
-    if poly_type != "convex_no_holes" and best_rect_rot is not None:
+    # Also apply to convex polygons to fix floating-point protrusions at diagonal edges.
+    if best_rect_rot is not None:
         try:
             prep_rot = shp_prep(rot_poly)
         except Exception:
@@ -1572,17 +1555,8 @@ def _worker_process_feature(args: tuple) -> Optional[tuple]:
         if poly is None:
             return None
 
-        # Optional floating-point precision normalisation
-        try:
-            from shapely import set_precision
-            minx, miny, maxx, maxy = poly.bounds
-            span = max(maxx - minx, maxy - miny)
-            if span > 0:
-                poly = set_precision(
-                    poly, grid_size=span * 1e-9, mode="valid_output"
-                )
-        except Exception:
-            pass
+        # SKIP precision normalization - it causes certify to check wrong polygon
+        # Keep original poly for final certification check
 
         if poly is None or poly.is_empty:
             return None
