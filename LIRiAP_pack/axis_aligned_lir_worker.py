@@ -444,17 +444,346 @@ except ImportError:
 # --------------------------------------------------------------------------
 # Scanline mask builder — O(n*v) instead of O(v²) cell-by-cell checks
 # --------------------------------------------------------------------------
+
+def _ring_intervals_at_y(
+    coords: np.ndarray,
+    y: float,
+    eps: float,
+) -> list[Tuple[float, float]]:
+    """
+    Return sorted inside x-intervals for a single closed ring at horizontal line y.
+
+    The ring input should be the coordinate array WITHOUT the duplicated closing
+    point. Uses the even-odd scanline rule.
+
+    For each non-horizontal edge (x0,y0)->(x1,y1), include its intersection if
+    min(y0,y1) <= y < max(y0,y1) after epsilon adjustment. Horizontal edges are
+    NOT treated as ordinary crossing edges �� they trigger ambiguity handling via
+    the boundary certification pass instead.
+    """
+    n = len(coords)
+    crossings: list[float] = []
+
+    for i in range(n):
+        x0, y0 = coords[i]
+        x1, y1 = coords[(i + 1) % n]
+
+        lo_y = min(y0, y1)
+        hi_y = max(y0, y1)
+
+        if lo_y > y + eps or hi_y < y - eps:
+            continue
+
+        if abs(y1 - y0) < eps * 0.1:
+            continue
+
+        t = (y - y0) / (y1 - y0)
+        t = max(0.0, min(1.0, t))
+        cx = x0 + t * (x1 - x0)
+        crossings.append(cx)
+
+    crossings.sort()
+    intervals: list[Tuple[float, float]] = []
+    for k in range(0, len(crossings) - 1, 2):
+        intervals.append((crossings[k], crossings[k + 1]))
+    return intervals
+
+
+def _merge_intervals(
+    intervals: list[Tuple[float, float]],
+    tol: float,
+) -> list[Tuple[float, float]]:
+    """Merge overlapping/touching intervals."""
+    if not intervals:
+        return []
+    sorted_ints = sorted(intervals, key=lambda x: (x[0], x[1]))
+    merged = [sorted_ints[0]]
+    for a, b in sorted_ints[1:]:
+        if a <= merged[-1][1] + tol:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def _intersect_intervals(
+    a: list[Tuple[float, float]],
+    b: list[Tuple[float, float]],
+    tol: float,
+) -> list[Tuple[float, float]]:
+    """Intersect two sorted interval lists."""
+    if not a or not b:
+        return []
+    result: list[Tuple[float, float]] = []
+    i = j = 0
+    while i < len(a) and j < len(b):
+        a_lo, a_hi = a[i]
+        b_lo, b_hi = b[j]
+        lo = max(a_lo, b_lo)
+        hi = min(a_hi, b_hi)
+        if lo <= hi - tol:
+            result.append((lo, hi))
+        if a_hi < b_hi:
+            i += 1
+        else:
+            j += 1
+    return result
+
+
+def _subtract_intervals(
+    base: list[Tuple[float, float]],
+    forbidden: list[Tuple[float, float]],
+    tol: float,
+) -> list[Tuple[float, float]]:
+    """Subtract forbidden intervals from base intervals."""
+    if not base:
+        return []
+    if not forbidden:
+        return base
+    result: list[Tuple[float, float]] = []
+    for b_lo, b_hi in base:
+        cur_lo, cur_hi = b_lo, b_hi
+        for f_lo, f_hi in forbidden:
+            if f_hi < cur_lo + tol or f_lo > cur_hi - tol:
+                continue
+            if f_lo <= cur_lo + tol:
+                cur_lo = f_hi
+            elif f_hi >= cur_hi - tol:
+                cur_hi = f_lo
+                break
+            else:
+                result.append((cur_lo, f_lo))
+                cur_lo = f_hi
+        if cur_hi - cur_lo > tol:
+            result.append((cur_lo, cur_hi))
+    return _merge_intervals(result, tol)
+
+
+def _mark_row_from_intervals(
+    mask: np.ndarray,
+    row_idx: int,
+    xs_v: np.ndarray,
+    intervals: list[Tuple[float, float]],
+    tol: float,
+) -> None:
+    """Mark cells in row_idx whose full x-span lies inside one of the intervals."""
+    if not intervals:
+        return
+    n_cols = mask.shape[1]
+    
+    intervals_arr = np.array(intervals)
+    x_lefts = intervals_arr[:, 0]
+    x_rights = intervals_arr[:, 1]
+    
+    lefts = xs_v[:-1]
+    rights = xs_v[1:]
+    
+    for k in range(len(intervals)):
+        x_lo = x_lefts[k] - tol
+        x_hi = x_rights[k] + tol
+        
+        col_start = 0
+        while col_start < n_cols and lefts[col_start] < x_lo:
+            col_start += 1
+        
+        if col_start >= n_cols:
+            continue
+        
+        col_end = col_start
+        while col_end < n_cols and rights[col_end] <= x_hi:
+            col_end += 1
+        
+        if col_end > col_start:
+            mask[row_idx, col_start:col_end] = True
+
+
 def _build_row_mask_scanline(
     poly: Polygon,
     xs_v: np.ndarray,
     ys_v: np.ndarray,
 ) -> np.ndarray:
     """
-    Build valid cell mask - uses original method which is correct.
-    The scanline approach needs more work to be compatible with
-    the strict poly.covers() validation in the algorithm.
+    Build valid cell mask using conservative scanline interval filling.
+
+    A mask cell [i, j] is True only if the full axis-aligned cell box
+    box(xs_v[j], ys_v[i], xs_v[j+1], ys_v[i+1]) is contained in the polygon
+    under poly.covers(...) semantics.
+
+    The algorithm:
+    1. For each row slab [y0, y1], compute x-intervals at both boundaries.
+    2. Intersect boundary intervals to get conservative valid spans.
+    3. Subtract similarly-computed hole spans.
+    4. Mark cells whose full x-span lies inside valid intervals.
+    5. Certify only first/last cells in each interval to eliminate false positives.
+    6. Fall back to original method if no valid cells found (degenerate cases).
+
+    This is conservative: false negatives are acceptable near boundaries, but
+    false positives are NOT acceptable because they let LRH build rectangles
+    that overflow outside the polygon or across holes.
     """
-    return _build_row_mask_original(poly, xs_v, ys_v)
+    n_rows = len(ys_v) - 1
+    n_cols = len(xs_v) - 1
+
+    if n_rows < 1 or n_cols < 1:
+        return np.zeros((n_rows, n_cols), dtype=bool)
+
+    try:
+        _prep = shp_prep(poly)
+    except Exception:
+        _prep = None
+
+    minx, miny, maxx, maxy = poly.bounds
+    bbox_h = maxy - miny
+    tiny_tol = max(bbox_h, 1.0) * 1e-12
+    merge_tol = tiny_tol * 10
+
+    exterior_coords = np.array(poly.exterior.coords[:-1], dtype=np.float64)
+
+    hole_coords_list: list[np.ndarray] = []
+    hole_y_ranges: list[tuple[float, float]] = []
+    for ring in poly.interiors:
+        coords = np.array(ring.coords[:-1], dtype=np.float64)
+        hole_coords_list.append(coords)
+        ys_ring = coords[:, 1]
+        hole_y_ranges.append((float(ys_ring.min()), float(ys_ring.max())))
+
+    mask = np.zeros((n_rows, n_cols), dtype=bool)
+
+    for i in range(n_rows):
+        y0, y1 = ys_v[i], ys_v[i + 1]
+        slab_h = y1 - y0
+
+        if slab_h <= tiny_tol:
+            continue
+
+        if hole_y_ranges:
+            row_in_hole = False
+            row_overlaps_hole = False
+            for h_lo, h_hi in hole_y_ranges:
+                if y0 < h_hi and y1 > h_lo:
+                    row_in_hole = True
+                    if y0 < h_hi and y1 > h_lo:
+                        row_overlaps_hole = True
+                    break
+            
+            if not row_in_hole:
+                outer_y0 = _ring_intervals_at_y(exterior_coords, y0 + tiny_tol, tiny_tol)
+                outer_y1 = _ring_intervals_at_y(exterior_coords, y1 - tiny_tol, tiny_tol)
+                outer_ints = _intersect_intervals(
+                    _merge_intervals(outer_y0, merge_tol),
+                    _merge_intervals(outer_y1, merge_tol),
+                    merge_tol,
+                )
+                if outer_ints:
+                    _mark_row_from_intervals(mask, i, xs_v, outer_ints, merge_tol)
+                continue
+            
+            eps_y = min(1e-10 * bbox_h, 1e-4 * slab_h)
+            eps_y = max(eps_y, tiny_tol)
+            y0_adj = y0 + eps_y
+            y1_adj = y1 - eps_y
+
+        eps_y = min(1e-10 * bbox_h, 1e-4 * slab_h)
+        eps_y = max(eps_y, tiny_tol)
+
+        y0_adj = y0 + eps_y
+        y1_adj = y1 - eps_y
+
+        outer_y0 = _ring_intervals_at_y(exterior_coords, y0_adj, tiny_tol)
+        outer_y1 = _ring_intervals_at_y(exterior_coords, y1_adj, tiny_tol)
+
+        outer_ints = _intersect_intervals(
+            _merge_intervals(outer_y0, merge_tol),
+            _merge_intervals(outer_y1, merge_tol),
+            merge_tol,
+        )
+
+        hole_ints_list: list[list[Tuple[float, float]]] = []
+        hole_x_bounds: list[list[Tuple[float, float]]] = []
+        row_has_holes = False
+        for h_coords in hole_coords_list:
+            h_y0 = _ring_intervals_at_y(h_coords, y0_adj, tiny_tol)
+            h_y1 = _ring_intervals_at_y(h_coords, y1_adj, tiny_tol)
+            h_int = _intersect_intervals(
+                _merge_intervals(h_y0, merge_tol),
+                _merge_intervals(h_y1, merge_tol),
+                merge_tol,
+            )
+            if h_int:
+                hole_ints_list.append(h_int)
+                hole_x_bounds.append(h_y0 + h_y1)
+                if not row_has_holes and (h_y0 or h_y1):
+                    row_has_holes = True
+
+        if hole_ints_list:
+            all_holes: list[Tuple[float, float]] = []
+            for h_int in hole_ints_list:
+                all_holes.extend(h_int)
+            merged_holes = _merge_intervals(all_holes, merge_tol)
+            valid_ints = _subtract_intervals(outer_ints, merged_holes, merge_tol)
+            row_overlaps_hole_int = bool(merged_holes)
+        else:
+            valid_ints = outer_ints
+            row_overlaps_hole_int = False
+
+        if hole_y_ranges and row_in_hole and not row_overlaps_hole_int:
+            for j in range(n_cols):
+                cell_box = box(xs_v[j], y0, xs_v[j + 1], y1)
+                if _prep is not None:
+                    ok = _prep.covers(cell_box)
+                else:
+                    ok = poly.covers(cell_box)
+                if ok:
+                    mask[i, j] = True
+            continue
+
+        if not valid_ints:
+            continue
+
+        _mark_row_from_intervals(mask, i, xs_v, valid_ints, merge_tol)
+
+        boundary_cols: set[int] = set()
+        for x_lo, x_hi in valid_ints:
+            col_start = 0
+            while col_start < n_cols and xs_v[col_start] < x_lo - merge_tol:
+                col_start += 1
+            if col_start >= n_cols:
+                continue
+            col_end = col_start
+            while col_end < n_cols and xs_v[col_end + 1] <= x_hi + merge_tol:
+                col_end += 1
+
+            if col_start < n_cols and mask[i, col_start]:
+                boundary_cols.add(col_start)
+            if col_end - 1 > col_start and col_end - 1 < n_cols and mask[i, col_end - 1]:
+                boundary_cols.add(col_end - 1)
+
+        if row_has_holes and hole_x_bounds:
+            col_min = min((xs_v[j] for j in range(n_cols) if mask[i, j]), default=float('inf'))
+            col_max = max((xs_v[j + 1] for j in range(n_cols) if mask[i, j]), default=float('-inf'))
+            if col_min < float('inf'):
+                for hxb in hole_x_bounds:
+                    for hint in hxb:
+                        if hint[1] > col_min and hint[0] < col_max:
+                            for j in range(n_cols):
+                                if mask[i, j] and xs_v[j] < hint[1] and xs_v[j + 1] > hint[0]:
+                                    boundary_cols.add(j)
+                            break
+
+        for j in boundary_cols:
+            if mask[i, j]:
+                cell_box = box(xs_v[j], y0, xs_v[j + 1], y1)
+                if _prep is not None:
+                    ok = _prep.covers(cell_box)
+                else:
+                    ok = poly.covers(cell_box)
+                if not ok:
+                    mask[i, j] = False
+
+    if not np.any(mask):
+        return _build_row_mask_original(poly, xs_v, ys_v)
+
+    return mask
 
 
 def _build_row_mask_original(
@@ -1167,26 +1496,27 @@ def _uniform_grid_solve(
                             if ca > best_cand_area:
                                 best_cand_area = ca
                                 best_cand = clipped
-                if best_cand is not None and best_cand_area > best_area:
-                    best_area = best_cand_area
-                    best_rect = best_cand
-                cand_unconstrained = box(x0, y0, x1, y1)
-                if not poly.covers(cand_unconstrained):
-                    clipped = _clip_rect_to_poly(poly, cand_unconstrained)
-                    if clipped is not None and poly.covers(clipped):
-                        ca = float(clipped.area)
-                        if ca > fallback_area:
-                            fallback_area = ca
-                            fallback_rect = clipped
+                if best_cand is not None:
+                    if best_cand_area > best_area:
+                        best_area = best_cand_area
+                        best_rect = best_cand
+                else:
+                    cand_raw = box(x0, y0, x1, y1)
+                    if poly.covers(cand_raw) and area > best_area:
+                        best_area = area
+                        best_rect = cand_raw
+                    elif not poly.covers(cand_raw):
+                        clipped = _clip_rect_to_poly(poly, cand_raw)
+                        if clipped is not None and poly.covers(clipped):
+                            ca = float(clipped.area)
+                            if ca > fallback_area:
+                                fallback_area = ca
+                                fallback_rect = clipped
                 continue
 
         if area > best_area:
             cand = box(x0, y0, x1, y1)
             if not poly.covers(cand):
-                # LRH may return a rect that spans a hole or protrudes outside
-                # the polygon. Record it as a fallback candidate but do NOT
-                # raise best_area — doing so would prevent later rows from
-                # finding the true optimal (exact) rect at those columns.
                 clipped = _clip_rect_to_poly(poly, cand)
                 if clipped is not None and poly.covers(clipped):
                     c_area = float(clipped.area)
@@ -1197,7 +1527,6 @@ def _uniform_grid_solve(
                 best_area = area
                 best_rect = cand
 
-    # Merge: return the exact rect if found, otherwise the best clipped fallback.
     if best_rect is None and fallback_rect is not None:
         return fallback_rect, fallback_area
     if fallback_rect is not None and fallback_area > best_area:
@@ -1391,26 +1720,27 @@ def _exact_solve_vertex_grid(
                             if ca > best_cand_area:
                                 best_cand_area = ca
                                 best_cand = clipped
-                if best_cand is not None and best_cand_area > best_area:
-                    best_area = best_cand_area
-                    best_rect = best_cand
-                # Also keep the unconstrained rect's clip as a fallback.
-                cand_unconstrained = box(x0, y0, x1, y1)
-                if not poly.covers(cand_unconstrained):
-                    clipped = _clip_rect_to_poly(poly, cand_unconstrained)
-                    if clipped is not None and poly.covers(clipped):
-                        ca = float(clipped.area)
-                        if ca > fallback_area:
-                            fallback_area = ca
-                            fallback_rect = clipped
+                if best_cand is not None:
+                    if best_cand_area > best_area:
+                        best_area = best_cand_area
+                        best_rect = best_cand
+                else:
+                    cand_raw = box(x0, y0, x1, y1)
+                    if poly.covers(cand_raw) and area > best_area:
+                        best_area = area
+                        best_rect = cand_raw
+                    elif not poly.covers(cand_raw):
+                        clipped = _clip_rect_to_poly(poly, cand_raw)
+                        if clipped is not None and poly.covers(clipped):
+                            ca = float(clipped.area)
+                            if ca > fallback_area:
+                                fallback_area = ca
+                                fallback_rect = clipped
                 continue
 
         if area > best_area:
             cand = box(x0, y0, x1, y1)
             if not poly.covers(cand):
-                # LRH may return a rect that spans a hole or protrudes outside.
-                # Record it as a fallback candidate but do NOT raise best_area --
-                # doing so would block later rows from finding the true exact rect.
                 clipped = _clip_rect_to_poly(poly, cand)
                 if clipped is not None and poly.covers(clipped):
                     c_area = float(clipped.area)
