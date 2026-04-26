@@ -53,8 +53,10 @@ from qgis.core import (
 )
 
 script_dir = os.path.dirname(__file__)
-if script_dir not in sys.path:
-    sys.path.append(script_dir)
+parent_dir = os.path.dirname(script_dir)
+for p in [script_dir, parent_dir]:
+    if p not in sys.path:
+        sys.path.append(p)
 
 from axis_aligned_lir_worker import _worker_process_feature, _NUMBA_AVAILABLE
 from help_descriptions import build_short_help
