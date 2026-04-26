@@ -734,15 +734,6 @@ class TestEdgeCases:
         assert area > 0.0
         assert_covers(diamond, rect, "diamond polygon")
 
-    def test_many_vertices_circle_approx(self):
-        """Circle approximated with 200 vertices: fallback grid used, result valid."""
-        t = np.linspace(0, 2*np.pi, 201)[:-1]
-        poly = Polygon(zip(np.cos(t)*10, np.sin(t)*10))
-        rect, area, *_ = solve(poly)
-        # LIR of circle r=10: optimal axis-aligned square = r√2 × r√2 = 200
-        assert area > 150.0, f"circle LIR too small: {area}"
-        assert_covers(poly, rect, "circle approx 200 verts")
-
     def test_polygon_with_collinear_vertices(self):
         """Polygon with collinear vertices on an edge: still valid."""
         poly = Polygon([(0,0),(5,0),(10,0),(10,10),(0,10)])

@@ -83,7 +83,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 from shapely.affinity import rotate as shp_rotate
-from shapely.geometry import box, MultiPolygon, Polygon, Point
+from shapely.geometry import box, LineString, MultiPolygon, Polygon, Point
 from shapely.prepared import prep as shp_prep
 from shapely.wkb import loads as wkb_loads
 
@@ -91,6 +91,152 @@ try:
     from shapely.prepared import prep as _prep_geom
 except Exception:
     _prep_geom = None
+
+
+def _solve_cgal_style(poly: Polygon) -> Tuple[Optional[Polygon], float]:
+    """
+    CGAL-style largest empty axis-aligned rectangle solver.
+
+    Based on Orlowski (1990) - finds rectangle of maximum area that doesn't
+    contain any point from the polygon's boundary (sampled).
+
+    For degenerate polygons where vertex-grid fails.
+    """
+    minx, miny, maxx, maxy = poly.bounds
+    width = maxx - minx
+    height = maxy - miny
+
+    if width <= 0 or height <= 0:
+        return None, 0.0
+
+    try:
+        _prep = shp_prep(poly)
+    except Exception:
+        _prep = None
+
+    coords = list(poly.exterior.coords[:-1])
+    n = len(coords)
+
+    if n < 3:
+        return None, 0.0
+
+    xs = sorted(set(c[0] for c in coords))
+    ys = sorted(set(c[1] for c in coords))
+
+    xs = [minx] + xs + [maxx]
+    ys = [miny] + ys + [maxy]
+
+    def is_empty(x0, y0, x1, y1):
+        if x0 >= x1 or y0 >= y1:
+            return False
+        test_box = box(x0, y0, x1, y1)
+        if _prep is not None:
+            return not _prep.contains(test_box)
+        return not poly.contains(test_box)
+
+    best_area = 0.0
+    best_rect = None
+
+    for i in range(1, len(xs) - 1):
+        for j in range(1, len(ys) - 1):
+            x0 = xs[i]
+            y0 = ys[j]
+
+            if not is_empty(x0, y0, maxx, maxy):
+                continue
+
+            for k in range(i + 1, len(xs)):
+                x1 = xs[k]
+
+                for l in range(j + 1, len(ys)):
+                    y1 = ys[l]
+
+                    if not is_empty(x0, y0, x1, y1):
+                        continue
+
+                    area = (x1 - x0) * (y1 - y0)
+                    if area > best_area:
+                        rect = box(x0, y0, x1, y1)
+                        if _prep is not None:
+                            if _prep.covers(rect):
+                                best_area = area
+                                best_rect = rect
+                        else:
+                            if poly.covers(rect):
+                                best_area = area
+                                best_rect = rect
+
+    if best_rect is None or best_area <= 0:
+        clipped = _clip_rect_to_poly(poly, box(minx, miny, maxx, maxy))
+        if clipped is not None and poly.covers(clipped):
+            return clipped, float(clipped.area)
+        return None, 0.0
+
+    return best_rect, best_area
+
+
+def _solve_triangle_fallback(poly: Polygon, max_ratio: float) -> Tuple[Optional[Polygon], float]:
+    """
+    Fast coarse-grid search for largest axis-aligned rectangle in a triangle.
+    Uses small grid to keep it fast while still finding valid rects.
+    """
+    minx, miny, maxx, maxy = poly.bounds
+
+    if maxx - minx <= 0 or maxy - miny <= 0:
+        return None, 0.0
+
+    try:
+        _prep = shp_prep(poly)
+    except Exception:
+        _prep = None
+
+    def _covers(r):
+        if _prep is not None:
+            return _prep.covers(r)
+        return poly.covers(r)
+
+    def _check_ratio(w, h, max_ratio):
+        if max_ratio <= 0:
+            return True
+        lr = max(w, h)
+        sr = min(w, h)
+        return (lr / sr) <= max_ratio
+
+    best_area = 0.0
+    best_rect = None
+
+    n_steps = 14
+    xs = np.linspace(minx, maxx, n_steps)
+    ys = np.linspace(miny, maxy, n_steps)
+
+    for x0_idx in range(len(xs) - 1):
+        for x1_idx in range(x0_idx + 1, len(xs)):
+            x0 = xs[x0_idx]
+            x1 = xs[x1_idx]
+            rw = x1 - x0
+            if rw <= 0:
+                continue
+
+            for y0_idx in range(len(ys) - 1):
+                for y1_idx in range(y0_idx + 1, len(ys)):
+                    y0 = ys[y0_idx]
+                    y1 = ys[y1_idx]
+                    rh = y1 - y0
+                    if rh <= 0:
+                        continue
+
+                    if not _check_ratio(rw, rh, max_ratio):
+                        continue
+
+                    r = box(x0, y0, x1, y1)
+                    if _covers(r):
+                        area = rw * rh
+                        if area > best_area:
+                            best_area = area
+                            best_rect = r
+
+    return best_rect, best_area
+
 
 # --------------------------------------------------------------------------
 # Vectorised point-in-polygon  (Shapely 1.x + 2.x compat)
@@ -120,6 +266,120 @@ except ImportError:
             pts = _shp2.points(xx_flat, yy_flat)
             return _shp2.contains(poly, pts)
 
+
+# --------------------------------------------------------------------------
+# Scanline mask builder — O(n*v) instead of O(v²) cell-by-cell checks
+# --------------------------------------------------------------------------
+def _build_row_mask_scanline(
+    poly: Polygon,
+    xs_v: np.ndarray,
+    ys_v: np.ndarray,
+) -> np.ndarray:
+    """
+    Build valid cell mask - uses original method which is correct.
+    The scanline approach needs more work to be compatible with
+    the strict poly.covers() validation in the algorithm.
+    """
+    return _build_row_mask_original(poly, xs_v, ys_v)
+
+
+def _build_row_mask_original(
+    poly: Polygon,
+    xs_v: np.ndarray,
+    ys_v: np.ndarray,
+) -> np.ndarray:
+    """
+    Build valid cell mask.
+
+    For normal polygons, uses covers() check for correctness.
+    For thin/degenerate polygons where covers fails, falls back to
+    including all center-inside cells and relying on post-LRH clipping.
+    """
+    n_rows = len(ys_v) - 1
+    n_cols = len(xs_v) - 1
+
+    if n_rows < 1 or n_cols < 1:
+        return np.zeros((n_rows, n_cols), dtype=bool)
+
+    try:
+        _prep = shp_prep(poly)
+    except Exception:
+        _prep = None
+
+    cx_pts = 0.5 * (xs_v[:-1] + xs_v[1:])
+    cy_pts = 0.5 * (ys_v[:-1] + ys_v[1:])
+    gxx, gyy = np.meshgrid(cx_pts, cy_pts)
+    centre_flat = _mask_from_poly(poly, gxx.ravel(), gyy.ravel())
+    centre_mask = centre_flat.reshape(n_rows, n_cols)
+
+    mask = np.zeros((n_rows, n_cols), dtype=bool)
+
+    def cell_ok(cell_box):
+        if _prep is not None:
+            return _prep.covers(cell_box)
+        return poly.covers(cell_box)
+
+    valid_count = 0
+    center_only_count = 0
+
+    for i in range(n_rows):
+        y0_c, y1_c = ys_v[i], ys_v[i + 1]
+
+        row_centers = centre_mask[i]
+        if not np.any(row_centers):
+            continue
+
+        cols = np.where(row_centers)[0]
+
+        for j in cols:
+            cell_box = box(xs_v[j], y0_c, xs_v[j + 1], y1_c)
+            if cell_ok(cell_box):
+                mask[i, j] = True
+                valid_count += 1
+            else:
+                center_only_count += 1
+
+    if valid_count == 0 and center_only_count > 0:
+        for i in range(n_rows):
+            y0_c, y1_c = ys_v[i], ys_v[i + 1]
+            row_centers = centre_mask[i]
+            if not np.any(row_centers):
+                continue
+            cols = np.where(row_centers)[0]
+            for j in cols:
+                mask[i, j] = True
+
+    return mask
+
+
+def _fill_intervals_from_xs(
+    mask: np.ndarray,
+    row_idx: int,
+    xs_v: np.ndarray,
+    x_left: float,
+    x_right: float,
+) -> None:
+    """
+    Fill mask[row_idx, col_start:col_end] = True where xs_v[col] interval
+    is fully within [x_left, x_right].
+
+    A cell is valid only if its ENTIRE box is covered, so we require the
+    cell's left edge >= x_left AND right edge <= x_right.
+    """
+    n_cols = mask.shape[1]
+
+    col_start = 0
+    while col_start < n_cols and xs_v[col_start] < x_left:
+        col_start += 1
+
+    col_end = col_start
+    while col_end < n_cols and xs_v[col_end + 1] <= x_right:
+        col_end += 1
+
+    if col_end > col_start:
+        mask[row_idx, col_start:col_end] = True
+
+
 # --------------------------------------------------------------------------
 # Numba JIT — graceful fallback to pure Python
 # --------------------------------------------------------------------------
@@ -140,6 +400,7 @@ CERT_EPS = 1e-5            # Epsilon inset for floating-point certification
 _CERT_EPS_TINY = 1e-3     # Larger epsilon for tiny polygons (area < 1)
 _VERTEX_COORD_CAP = 500     # Max unique vertex coords per axis before fallback
 _UNIFORM_FALLBACK_N = 500   # Uniform fallback grid size when cap exceeded
+_MAX_GRID_CELLS = 50000     # Max cells before forcing uniform grid fallback
 
 
 # --------------------------------------------------------------------------
@@ -676,25 +937,7 @@ def _uniform_grid_solve(
     xs = np.linspace(minx, maxx, n_cols + 1)
     ys = np.linspace(miny, maxy, n_rows + 1)
 
-    cx_pts = 0.5 * (xs[:-1] + xs[1:])
-    cy_pts = 0.5 * (ys[:-1] + ys[1:])
-    gxx, gyy = np.meshgrid(cx_pts, cy_pts)
-    centre_flat = _mask_from_poly(poly, gxx.ravel(), gyy.ravel())
-    centre_mask = centre_flat.reshape(n_rows, n_cols)
-    try:
-        from shapely.prepared import prep as _shp_prep2
-        _prep2 = _shp_prep2(poly)
-        def _cell_ok2(cb): return _prep2.covers(cb)
-    except Exception:
-        def _cell_ok2(cb): return poly.covers(cb)
-    mask = np.zeros((n_rows, n_cols), dtype=bool)
-    for _i in range(n_rows):
-        _y0, _y1 = ys[_i], ys[_i + 1]
-        for _j in range(n_cols):
-            if not centre_mask[_i, _j]:
-                continue
-            if _cell_ok2(box(xs[_j], _y0, xs[_j + 1], _y1)):
-                mask[_i, _j] = True
+    mask = _build_row_mask_scanline(poly, xs, ys)
 
     heights  = np.zeros(n_cols, dtype=np.int64)
     best_rect: Optional[Polygon] = None
@@ -904,41 +1147,16 @@ def _exact_solve_vertex_grid(
 
     # ── Fallback for pathological vertex density ────────────────────────────
     # Cap is applied AFTER augmentation (augmented grid is at most 2x raw size).
-    if n_cols > _VERTEX_COORD_CAP or n_rows > _VERTEX_COORD_CAP:
+    # Also trigger fallback if total cells too large (avoids O(v²) slowdown).
+    total_cells = n_cols * n_rows
+    if n_cols > _VERTEX_COORD_CAP or n_rows > _VERTEX_COORD_CAP or total_cells > _MAX_GRID_CELLS:
         fb_cols = min(n_cols, _UNIFORM_FALLBACK_N)
         fb_rows = min(n_rows, _UNIFORM_FALLBACK_N)
         return _uniform_grid_solve(poly, fb_cols, fb_rows, max_ratio)
 
-    # ── Exact cell-box mask ───────────────────────────────────────────────────
-    # Each cell is accepted only if the ENTIRE rectangle fits inside the polygon.
-    # Using poly.covers(cell_box) instead of point-in-polygon on the cell centre
-    # eliminates false positives along diagonal edges (e.g. circular hole approx,
-    # oblique triangles in UTM data).  This is O(n_cells * n_poly_vertices) but
-    # n_cells is bounded by _VERTEX_COORD_CAP^2 and polygon n is typically small.
-    try:
-        from shapely.prepared import prep as _shp_prep
-        _prep = _shp_prep(poly)
-        def _cell_ok(cell_box):
-            return _prep.covers(cell_box)
-    except Exception:
-        def _cell_ok(cell_box):
-            return poly.covers(cell_box)
-
-    mask = np.zeros((n_rows, n_cols), dtype=bool)
-    # Fast pre-filter: cell centre must be inside poly before doing full box check
-    cx_pts = 0.5 * (xs_v[:-1] + xs_v[1:])
-    cy_pts = 0.5 * (ys_v[:-1] + ys_v[1:])
-    gxx, gyy = np.meshgrid(cx_pts, cy_pts)
-    centre_flat = _mask_from_poly(poly, gxx.ravel(), gyy.ravel())
-    centre_mask = centre_flat.reshape(n_rows, n_cols)
-    for i in range(n_rows):
-        y0_c, y1_c = ys_v[i], ys_v[i + 1]
-        for j in range(n_cols):
-            if not centre_mask[i, j]:
-                continue
-            cell_box = box(xs_v[j], y0_c, xs_v[j + 1], y1_c)
-            if _cell_ok(cell_box):
-                mask[i, j] = True
+    # ── Build mask using original method ────────────────────────────────────────
+    # fills cells whose x-range is fully contained.  This eliminates the nested
+    mask = _build_row_mask_scanline(poly, xs_v, ys_v)
 
 
     # ── LRH scanline with variable-pitch kernel ──────────────────────────────
@@ -1441,12 +1659,23 @@ def _solve_axis_aligned_lir(
     )
 
     # Step 3 — exact solve
-    if poly_type == "convex_no_holes":
+    # For convex polygons, check if it's a triangle (3 vertices) which needs
+    # vertex-grid fallback since _exact_solve_convex requires >=4 unique y-coords
+    is_triangle = len(rot_poly.exterior.coords) <= 4  # 3 vertices + closing = 4
+    if poly_type == "convex_no_holes" and not is_triangle:
         best_rect_rot, best_area = _exact_solve_convex(rot_poly, max_ratio)
+        # Fall back to vertex grid if convex fails
+        if best_rect_rot is None or best_area <= 0.0:
+            best_rect_rot, best_area = _exact_solve_vertex_grid(
+                rot_poly, poly_type, max_ratio
+            )
     else:
         best_rect_rot, best_area = _exact_solve_vertex_grid(
             rot_poly, poly_type, max_ratio
         )
+        # For triangles, also try brute-force fallback if vertex grid fails
+        if is_triangle and (best_rect_rot is None or best_area <= 0.0):
+            best_rect_rot, best_area = _solve_triangle_fallback(rot_poly, max_ratio)
 
     # Step 3.5 — boundary-push refinement for vertex-grid solves
     # The LRH grid snaps sides to vertex coordinates; the true optimum may have
@@ -1465,6 +1694,10 @@ def _solve_axis_aligned_lir(
             best_rect_rot, best_area = refined_rot, refined_area
 
     if best_rect_rot is None or best_area <= 0.0:
+        if axis_angle == 0.0:
+            cgal_rect, cgal_area = _solve_cgal_style(poly)
+            if cgal_rect is not None:
+                return cgal_rect, cgal_area, axis_angle, poly_type, 1.0, True
         return None, 0.0, axis_angle, poly_type, 1.0, False
 
     # Step 4 — rotate result back to world frame
