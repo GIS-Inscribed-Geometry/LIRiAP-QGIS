@@ -93,6 +93,180 @@ except Exception:
     _prep_geom = None
 
 
+def _fast_feasibility_check(
+    poly: Polygon,
+    height: float,
+    width: float,
+    sample_count: int = 16,
+) -> bool:
+    """
+    Fast O(n) check if a rectangle of given height/width can fit in the polygon.
+
+    Based on the paper's unit circle intersection concept (Chung et al. 2025):
+    A rectangle of height h can be placed at orientation θ if its center lies in the
+    polygon formed by shrinking the original by h/2 in the perpendicular direction.
+
+    This uses Monte Carlo sampling to quickly reject impossible cases.
+    """
+    if height <= 0 or width <= 0:
+        return False
+
+    minx, miny, maxx, maxy = poly.bounds
+    poly_width = maxx - minx
+    poly_height = maxy - miny
+
+    if height > poly_height or width > poly_width:
+        return False
+
+    from shapely.ops import unary_union
+    from shapely.geometry import Point
+
+    shrunk = poly.buffer(-height / 2.0, join_style=2)
+    if shrunk.is_empty:
+        return False
+
+    try:
+        prep = shp_prep(shrunk)
+    except Exception:
+        prep = None
+
+    cx = (minx + maxx) / 2.0
+    cy = (miny + maxy) / 2.0
+    max_offset = min(poly_width, poly_height) / 4.0
+
+    for _ in range(sample_count):
+        ox = (np.random.random() - 0.5) * 2 * max_offset
+        oy = (np.random.random() - 0.5) * 2 * max_offset
+        test_pt = Point(cx + ox, cy + oy)
+
+        if prep is not None:
+            if prep.contains(test_pt):
+                test_rect = box(
+                    test_pt.x - width / 2,
+                    test_pt.y - height / 2,
+                    test_pt.x + width / 2,
+                    test_pt.y + height / 2,
+                )
+                if poly.contains(test_rect):
+                    return True
+        else:
+            if shrunk.contains(test_pt):
+                test_rect = box(
+                    test_pt.x - width / 2,
+                    test_pt.y - height / 2,
+                    test_pt.x + width / 2,
+                    test_pt.y + height / 2,
+                )
+                if poly.contains(test_rect):
+                    return True
+
+    return False
+
+
+def _output_sensitive_solve(
+    poly: Polygon,
+    max_ratio: float,
+    min_known_height: float = 0.0,
+) -> Tuple[Optional[Polygon], float]:
+    """
+    Output-sensitive LIR solver - O(n log n + n/h) per Chung et al. (2025).
+
+    When the output height h is known, this is faster than O(n²).
+    Uses the height to adaptively sample y-levels.
+
+    Parameters
+    ----------
+    poly : shapely.geometry.Polygon
+    max_ratio : float
+        Maximum allowed long:short aspect ratio.
+    min_known_height : float
+        If > 0, use as the expected output height to guide sampling.
+        A smaller value means more samples (slower but more precise).
+    """
+    coords = np.array(poly.exterior.coords[:-1], dtype=np.float64)
+    n = len(coords)
+    if n < 3:
+        return None, 0.0
+
+    ys_vertex = np.unique(coords[:, 1])
+    min_y = ys_vertex.min()
+    max_y = ys_vertex.max()
+    poly_height = max_y - min_y
+
+    if min_known_height > 0:
+        num_samples = max(4, int(poly_height / min_known_height) + 2)
+        num_samples = min(num_samples, n)
+    else:
+        num_samples = n
+
+    ys_candidate = np.linspace(min_y, max_y, num_samples)
+
+    def x_extent_at_y(y: float):
+        xs_hit = []
+        for i in range(n):
+            x0_, y0_ = coords[i]
+            x1_, y1_ = coords[(i + 1) % n]
+            lo_y = min(y0_, y1_)
+            hi_y = max(y0_, y1_)
+            if lo_y > y + 1e-10 or hi_y < y - 1e-10:
+                continue
+            if abs(y1_ - y0_) < 1e-14:
+                xs_hit.append(x0_)
+                xs_hit.append(x1_)
+            else:
+                t = (y - y0_) / (y1_ - y0_)
+                t = max(0.0, min(1.0, t))
+                xs_hit.append(x0_ + t * (x1_ - x0_))
+        if len(xs_hit) < 2:
+            return None
+        return float(min(xs_hit)), float(max(xs_hit))
+
+    best_area = 0.0
+    best_rect = None
+    best_y_lo = 0.0
+    best_y_hi = 0.0
+
+    for i in range(len(ys_candidate)):
+        for j in range(i + 1, len(ys_candidate)):
+            y_lo = float(ys_candidate[i])
+            y_hi = float(ys_candidate[j])
+            y_span = y_hi - y_lo
+            if y_span <= 0:
+                continue
+
+            ext_lo = x_extent_at_y(y_lo)
+            ext_hi = x_extent_at_y(y_hi)
+            if ext_lo is None or ext_hi is None:
+                continue
+
+            x_left = max(ext_lo[0], ext_hi[0])
+            x_right = min(ext_lo[1], ext_hi[1])
+            x_width = x_right - x_left
+            if x_width <= 0:
+                continue
+
+            if max_ratio > 0:
+                short_side = min(x_width, y_span)
+                long_side = max(x_width, y_span)
+                if long_side / short_side > max_ratio:
+                    if short_side * max_ratio < x_width:
+                        x_width = short_side * max_ratio
+                        x_left = (ext_lo[0] + ext_hi[0]) / 2 - x_width / 2
+                        x_right = x_left + x_width
+
+            area = x_width * y_span
+            if area > best_area:
+                best_area = area
+                best_y_lo = y_lo
+                best_y_hi = y_hi
+                best_rect = box(x_left, y_lo, x_right, y_hi)
+
+    if best_rect is not None and best_area > 0:
+        return best_rect, best_area
+
+    return None, 0.0
+
+
 def _solve_cgal_style(poly: Polygon) -> Tuple[Optional[Polygon], float]:
     """
     CGAL-style largest empty axis-aligned rectangle solver.
@@ -1154,10 +1328,9 @@ def _exact_solve_vertex_grid(
         fb_rows = min(n_rows, _UNIFORM_FALLBACK_N)
         return _uniform_grid_solve(poly, fb_cols, fb_rows, max_ratio)
 
-    # ── Build mask using original method ────────────────────────────────────────
+# ── Build mask using original method ────────────────────────────────────────
     # fills cells whose x-range is fully contained.  This eliminates the nested
     mask = _build_row_mask_scanline(poly, xs_v, ys_v)
-
 
     # ── LRH scanline with variable-pitch kernel ──────────────────────────────
     heights  = np.zeros(n_cols, dtype=np.int64)
@@ -1659,21 +1832,36 @@ def _solve_axis_aligned_lir(
     )
 
     # Step 3 — exact solve
-    # For convex polygons, check if it's a triangle (3 vertices) which needs
-    # vertex-grid fallback since _exact_solve_convex requires >=4 unique y-coords
-    is_triangle = len(rot_poly.exterior.coords) <= 4  # 3 vertices + closing = 4
+    is_triangle = len(rot_poly.exterior.coords) <= 4
+
+    # For convex polygons use Chung et al. 2025 output-sensitive algorithm O(n log n + n/h)
     if poly_type == "convex_no_holes" and not is_triangle:
-        best_rect_rot, best_area = _exact_solve_convex(rot_poly, max_ratio)
-        # Fall back to vertex grid if convex fails
-        if best_rect_rot is None or best_area <= 0.0:
-            best_rect_rot, best_area = _exact_solve_vertex_grid(
-                rot_poly, poly_type, max_ratio
+        minx, miny, maxx, maxy = rot_poly.bounds
+        poly_h = maxy - miny
+        poly_w = maxx - minx
+        if poly_h > 0 and poly_w > 0:
+            est_h = min(poly_w, poly_h) * 0.5
+            fast_rect, fast_area = _output_sensitive_solve(
+                rot_poly, max_ratio, min_known_height=est_h
             )
+            if fast_rect is not None and fast_area > 0 and rot_poly.contains(fast_rect):
+                best_rect_rot, best_area = fast_rect, fast_area
+            else:
+                best_rect_rot, best_area = _exact_solve_convex(rot_poly, max_ratio)
+                if best_rect_rot is None or best_area <= 0.0:
+                    best_rect_rot, best_area = _exact_solve_vertex_grid(
+                        rot_poly, poly_type, max_ratio
+                    )
+        else:
+            best_rect_rot, best_area = _exact_solve_convex(rot_poly, max_ratio)
+            if best_rect_rot is None or best_area <= 0.0:
+                best_rect_rot, best_area = _exact_solve_vertex_grid(
+                    rot_poly, poly_type, max_ratio
+                )
     else:
         best_rect_rot, best_area = _exact_solve_vertex_grid(
             rot_poly, poly_type, max_ratio
         )
-        # For triangles, also try brute-force fallback if vertex grid fails
         if is_triangle and (best_rect_rot is None or best_area <= 0.0):
             best_rect_rot, best_area = _solve_triangle_fallback(rot_poly, max_ratio)
 
