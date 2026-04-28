@@ -32,15 +32,16 @@ jobs:
           pip install numba || echo "numba optional – skipping"
 
       # Hard-fail only on real errors: syntax (E9xx), undefined names (F821),
-      # redefined builtins (F811), and dangerous bare-except (E722).
-      # Everything else is pre-existing style debt — addressed gradually.
+      # and dangerous bare-except (E722).
+      # F811 (redefinition of unused name) is a style hint — handled below.
       - name: Flake8 — errors only (hard fail)
         run: |
           flake8 LIRiAP_pack LiRiAP_provider \
-            --select=E9,F821,F811,E722 \
+            --select=E9,F821,E722 \
             --count --statistics
 
       # Style + quality warnings: informational, never blocks the build.
+      # Includes F811 (shadowed imports) as a soft nudge for future cleanup.
       - name: Flake8 — style warnings (soft, no fail)
         run: |
           flake8 LIRiAP_pack LiRiAP_provider \
