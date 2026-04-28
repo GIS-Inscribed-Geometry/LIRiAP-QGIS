@@ -1,5 +1,11 @@
 # LIRiAP
 
+[![Wiki](https://img.shields.io/badge/Documentation-Wiki-blue)](https://github.com/Wolren/LIRiAP-QGIS/wiki)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![QGIS](https://img.shields.io/badge/QGIS-4.0+-green)](https://www.qgis.org/)
+[![Qt](https://img.shields.io/badge/Qt-6.x-green)](https://www.qt.io/)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue)](https://www.python.org/)
+
 LIRiAP (Largest Inscribed Rectangle in Arbitrary Polygon) is a set of QGIS Processing algorithms for computing the largest inscribed rectangles in polygon features.
 
 ## Problem statement
@@ -160,6 +166,56 @@ Benchmarked with:
 | P7      | BCRS                   | True (fallback enabled)  | 51.30                              | **              |                          |
 | P8      | BCRS Fast              | True (fallback enabled)  | 30.19                              | **              |                          |
 | P9      | Axis-Aligned LIR       | True (fallback enabled) | 14.91                              | 157.89          | 10.5912                  |
+
+## Installation & Usage
+
+### Option 1: As Script Folder (Quick Testing)
+
+1. Copy the `LIRiAP_pack` folder to your QGIS script folder:
+   - Windows: `C:\Users\<username>\AppData\Roaming\QGIS\QGIS3\profiles\default\processing\scripts\`
+   - Linux: `~/.local/share/QGIS/QGIS3/profiles/default/processing/scripts/`
+   - macOS: `~/Library/Application Support/QGIS/QGIS3/profiles/default/processing/scripts/`
+
+2. Open QGIS
+3. Open the Processing Toolbox (`Processing` → `Toolbox`)
+4. Search for "LIRiAP" — the algorithms appear under "Scripts" → "LIRiAP"
+
+### Option 2: As a Plugin Provider (Recommended for Regular Use)
+
+1. Copy the entire repository (or create a symlink) to your QGIS plugins folder:
+   - Windows: `C:\Users\<username>\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins\LIRiAP\`
+   - Linux: `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/LIRiAP/`
+   - macOS: `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/LIRiAP/`
+
+2. Ensure the folder contains:
+   - `LiRiAP_provider/` (the QGIS plugin)
+   - `LIRiAP_pack/` (the algorithm pack)
+
+3. Open QGIS
+4. Go to `Plugins` → `Manage and Install Plugins`
+5. Enable "LIRiAP" (it should appear in the list)
+
+6. Algorithms appear in Processing Toolbox under "LIRiAP" group
+
+### Running an Algorithm
+
+1. Open Processing Toolbox (`Processing` → `Toolbox`)
+2. Navigate to **LIRiAP** (or search for specific algorithm name)
+3. Double-click an algorithm (e.g., "Approximation Standard")
+4. Select:
+   - **Input layer**: Your polygon layer
+   - Adjust parameters as needed (grid resolution, angle step, etc.)
+5. Click **Run**
+
+### Dependencies
+
+- **Required**: NumPy, SciPy, Shapely
+- **Optional**: Numba (for JIT acceleration — significantly speeds up computations)
+
+Numba will be auto-installed if `AUTO_INSTALL_NUMBA` is enabled, or install manually:
+```
+pip install numba
+```
 
 ## Folder layout
 
