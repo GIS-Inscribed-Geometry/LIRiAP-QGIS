@@ -5,6 +5,7 @@
 [![QGIS](https://img.shields.io/badge/QGIS-4.0+-green)](https://www.qgis.org/)
 [![Qt](https://img.shields.io/badge/Qt-6.x-green)](https://www.qt.io/)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue)](https://www.python.org/)
+[![Release](https://img.shields.io/github/v/release/Wolren/LIRiAP-QGIS)](https://github.com/Wolren/LIRiAP-QGIS/releases/latest)
 
 LIRiAP (Largest Inscribed Rectangle in Arbitrary Polygon) is a set of QGIS Processing algorithms for computing the largest inscribed rectangles in polygon features.
 
@@ -18,6 +19,8 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 4. **Axis-Aligned family**: exact fixed-axis solve with vertex-coordinate precision.
 
 ## Result screenshots (constrained to 16:10 resolution)
+
+![Axis-aligned](media/Axis-aligned.png)
 
 ### Approximation (less vs denser grid)
 
@@ -62,7 +65,7 @@ From the fastest to slowest. BCRS without multithreaded processing is usually th
 | Approximation | Fast area-focused search                     | No                               | No                 |
 | Contained     | Certified contained rectangle search         | Yes (unless fallback is enabled) | No                 |
 | BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (CABF)         |
-| Axis-Aligned  | Exact fixed-axis solve                       | Yes (vertex-coordinate)         | N/A                |
+| Axis-Aligned  | Exact fixed-axis solve                       | Yes (vertex-coordinate)          | N/A                |
 
 Best execution mode by algorithm (@290 @5406 are number of run features in a dataset):
 
@@ -89,7 +92,6 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 4. **Refinement and checks**: apply finer search and containment-related adjustments (depending on variant).
 5. **Output**: write rectangle geometry and metrics (area, angle, ratio, and variant-specific diagnostics).
 
-
 ## Algorithms
 
 
@@ -101,7 +103,7 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 | Contained Fast                                          | Same as Contained Standard with optimized execution          | Same certified/best-effort semantics as Standard                                                        | No expansion stage after certification                             |
 | BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | Includes CABF boundary expansion (full target method in this pack) |
 | BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | Includes CABF boundary expansion                                   |
-| Axis-Aligned LIR                                        | Exact fixed-axis solve                                      | Exact (vertex-coordinate precision)                                                                    | N/A                                                                |
+| Axis-Aligned LIR                                        | Exact fixed-axis solve                                       | Exact (vertex-coordinate precision)                                                                     | N/A                                                                |
 
 ## Setting semantics
 
@@ -125,46 +127,46 @@ Benchmarked with:
 ### Baseline profile (N_WORKERS=1, USE_CHUNKING=False)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ------------------------ | ----------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | n/a                      | 7.13*                               | 127.25          | 17.8471                  |
-| P2      | Approximation Fast     | n/a                      | 6.98*                               | 125.93          | 18.0415                  |
-| P3      | Contained Standard     | False (strict)           | 30.45                               | 574.13          | 18.8548                  |
-| P4      | Contained Standard     | True (fallback enabled)  | 30.75                               | 573.59          | 18.6533                  |
-| P5      | Contained Fast         | True (fallback enabled) | 12.25*                              | 226.05          | 18.4531                  |
-| P6      | BCRS                   | False (strict)           | 42.91                               | 772.05          | 17.9923                  |
-| P7      | BCRS                   | True (fallback enabled)  | 42.35                               | 788.03          | 18.6076                  |
-| P8      | BCRS Fast              | True (fallback enabled)  | 23.61                               | 445.01          | 18.8484                  |
-| P9      | Axis-Aligned LIR       | True (fallback enabled)  | 11.81                               | 120.24          | 10.1812                  |
+| Profile | Algorithm              | ALWAYS_RETURN           | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| ------- | ---------------------- | ----------------------- | ---------------------------------- | --------------- | ------------------------ |
+| P1      | Approximation Standard | n/a                     | 7.13*                              | 127.25          | 17.8471                  |
+| P2      | Approximation Fast     | n/a                     | 6.98*                              | 125.93          | 18.0415                  |
+| P3      | Contained Standard     | False (strict)          | 30.45                              | 574.13          | 18.8548                  |
+| P4      | Contained Standard     | True (fallback enabled) | 30.75                              | 573.59          | 18.6533                  |
+| P5      | Contained Fast         | True (fallback enabled) | 12.25*                             | 226.05          | 18.4531                  |
+| P6      | BCRS                   | False (strict)          | 42.91                              | 772.05          | 17.9923                  |
+| P7      | BCRS                   | True (fallback enabled) | 42.35                              | 788.03          | 18.6076                  |
+| P8      | BCRS Fast              | True (fallback enabled) | 23.61                              | 445.01          | 18.8484                  |
+| P9      | Axis-Aligned LIR       | True (fallback enabled) | 11.81                              | 120.24          | 10.1812                  |
 
 ### Parallel profile (N_WORKERS=12, USE_CHUNKING=False)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ------------------------ | ---------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | n/a                      | 5.97*                              | 112.30          | 18.8107                  |
-| P2      | Approximation Fast     | n/a                      | 5.90*                              | 108.43          | 18.3780                  |
-| P3      | Contained Standard     | False (strict)           | 22.27                              | 405.91          | 18.2268                  |
-| P4      | Contained Standard     | True (fallback enabled)  | 22.05                              | 410.21          | 18.6036                  |
+| Profile | Algorithm              | ALWAYS_RETURN           | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| ------- | ---------------------- | ----------------------- | ---------------------------------- | --------------- | ------------------------ |
+| P1      | Approximation Standard | n/a                     | 5.97*                              | 112.30          | 18.8107                  |
+| P2      | Approximation Fast     | n/a                     | 5.90*                              | 108.43          | 18.3780                  |
+| P3      | Contained Standard     | False (strict)          | 22.27                              | 405.91          | 18.2268                  |
+| P4      | Contained Standard     | True (fallback enabled) | 22.05                              | 410.21          | 18.6036                  |
 | P5      | Contained Fast         | True (fallback enabled) | 12.03*                             | 224.82          | 18.6883                  |
-| P6      | BCRS                   | False (strict)           | 51.83                              | 925.01          | 17.8470                  |
-| P7      | BCRS                   | True (fallback enabled)  | 50.88                              | 941.69          | 18.5081                  |
+| P6      | BCRS                   | False (strict)          | 51.83                              | 925.01          | 17.8470                  |
+| P7      | BCRS                   | True (fallback enabled) | 50.88                              | 941.69          | 18.5081                  |
 | P8      | BCRS Fast              | True (fallback enabled) | 29.84                              | 557.11          | 18.6699                  |
-| P9      | Axis-Aligned LIR       | True (fallback enabled)  | 14.83                              | 158.53          | 10.6897                  |
+| P9      | Axis-Aligned LIR       | True (fallback enabled) | 14.83                              | 158.53          | 10.6897                  |
 
 ### Parallel + chunking profile (N_WORKERS=12, USE_CHUNKING=True)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ------------------------ | ---------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | n/a                      | 6.04*                              | 109.76          | 18.1722                  |
-| P2      | Approximation Fast     | n/a                      | 5.90*                              | 108.43          | 18.3780                  |
-| P3      | Contained Standard     | False (strict)           | 21.98                              | 405.95          | 18.4691                  |
-| P4      | Contained Standard     | True (fallback enabled)  | 21.96                              | 405.15          | 18.4495                  |
+| Profile | Algorithm              | ALWAYS_RETURN           | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| ------- | ---------------------- | ----------------------- | ---------------------------------- | --------------- | ------------------------ |
+| P1      | Approximation Standard | n/a                     | 6.04*                              | 109.76          | 18.1722                  |
+| P2      | Approximation Fast     | n/a                     | 5.90*                              | 108.43          | 18.3780                  |
+| P3      | Contained Standard     | False (strict)          | 21.98                              | 405.95          | 18.4691                  |
+| P4      | Contained Standard     | True (fallback enabled) | 21.96                              | 405.15          | 18.4495                  |
 | P5      | Contained Fast         | True (fallback enabled) | 12.01*                             | 224.82          | 18.7194                  |
-| P6      | BCRS                   | False (strict)           | 51.10                              | **              |                          |
-| P7      | BCRS                   | True (fallback enabled)  | 51.30                              | **              |                          |
-| P8      | BCRS Fast              | True (fallback enabled)  | 30.19                              | **              |                          |
+| P6      | BCRS                   | False (strict)          | 51.10                              | **              |                          |
+| P7      | BCRS                   | True (fallback enabled) | 51.30                              | **              |                          |
+| P8      | BCRS Fast              | True (fallback enabled) | 30.19                              | **              |                          |
 | P9      | Axis-Aligned LIR       | True (fallback enabled) | 14.91                              | 157.89          | 10.5912                  |
 
 ## Installation & Usage
@@ -172,10 +174,10 @@ Benchmarked with:
 ### Option 1: As Script Folder (Quick Testing)
 
 1. Copy the `LIRiAP_pack` folder to your QGIS script folder:
+
    - Windows: `C:\Users\<username>\AppData\Roaming\QGIS\QGIS3\profiles\default\processing\scripts\`
    - Linux: `~/.local/share/QGIS/QGIS3/profiles/default/processing/scripts/`
    - macOS: `~/Library/Application Support/QGIS/QGIS3/profiles/default/processing/scripts/`
-
 2. Open QGIS
 3. Open the Processing Toolbox (`Processing` → `Toolbox`)
 4. Search for "LIRiAP" — the algorithms appear under "Scripts" → "LIRiAP"
@@ -183,18 +185,17 @@ Benchmarked with:
 ### Option 2: As a Plugin Provider (Recommended for Regular Use)
 
 1. Copy the entire repository (or create a symlink) to your QGIS plugins folder:
+
    - Windows: `C:\Users\<username>\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins\LIRiAP\`
    - Linux: `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/LIRiAP/`
    - macOS: `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/LIRiAP/`
-
 2. Ensure the folder contains:
+
    - `LiRiAP_provider/` (the QGIS plugin)
    - `LIRiAP_pack/` (the algorithm pack)
-
 3. Open QGIS
 4. Go to `Plugins` → `Manage and Install Plugins`
 5. Enable "LIRiAP" (it should appear in the list)
-
 6. Algorithms appear in Processing Toolbox under "LIRiAP" group
 
 ### Running an Algorithm
@@ -213,6 +214,7 @@ Benchmarked with:
 - **Optional**: Numba (for JIT acceleration — significantly speeds up computations)
 
 Numba will be auto-installed if `AUTO_INSTALL_NUMBA` is enabled, or install manually:
+
 ```
 pip install numba
 ```

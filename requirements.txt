@@ -1,0 +1,6 @@
+shapely
+numpy
+flake8
+pylint
+pytest
+pytest-cov
