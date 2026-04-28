@@ -1,13 +1,12 @@
 name: Release
 
-# Triggered when a vX.Y.Z tag is pushed (e.g.  git tag v1.2.0 && git push --tags)
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
-  contents: write   # needed to create the GitHub Release and upload assets
+  contents: write
 
 jobs:
   build-and-release:
@@ -18,18 +17,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # full history so we can generate a changelog
+          fetch-depth: 0
 
-      # ── derive version from the tag ───────────────────────────────────────
       - name: Extract version
         id: version
         run: |
-          TAG=${GITHUB_REF_NAME}          # e.g. v1.2.0
-          VERSION=${TAG#v}               # e.g. 1.2.0
-          echo "tag=$TAG"     >> $GITHUB_OUTPUT
+          TAG=${GITHUB_REF_NAME}
+          VERSION=${TAG#v}
+          echo "tag=$TAG"         >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      # ── validate that metadata.txt version matches the tag ────────────────
       - name: Check metadata.txt version
         run: |
           META_VERSION=$(grep '^version' LiRiAP_provider/metadata.txt | cut -d= -f2 | tr -d ' ')
@@ -40,9 +37,6 @@ jobs:
           fi
           echo "Version OK: $META_VERSION"
 
-      # ── build the QGIS-ready .zip ─────────────────────────────────────────
-      # The plugin zip must contain a single top-level folder named after the
-      # plugin so QGIS can install it directly.
       - name: Build plugin zip
         run: |
           PLUGIN_DIR="LIRiAP"
@@ -50,19 +44,15 @@ jobs:
           ZIP_NAME="LIRiAP_${VERSION}.zip"
 
           mkdir -p dist/${PLUGIN_DIR}
+          cp -r LIRiAP_pack       dist/${PLUGIN_DIR}/
+          cp -r LiRiAP_provider/. dist/${PLUGIN_DIR}/
+          cp    README.md         dist/${PLUGIN_DIR}/ 2>/dev/null || true
+          cp    LICENSE           dist/${PLUGIN_DIR}/ 2>/dev/null || true
 
-          # Copy the two source trees into the plugin folder
-          cp -r LIRiAP_pack          dist/${PLUGIN_DIR}/
-          cp -r LiRiAP_provider/.    dist/${PLUGIN_DIR}/
-          cp    README.md            dist/${PLUGIN_DIR}/ 2>/dev/null || true
-          cp    LICENSE              dist/${PLUGIN_DIR}/ 2>/dev/null || true
-
-          # Remove Python cache artefacts
           find dist/ -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
           find dist/ -name '*.pyc' -delete
           find dist/ -name '*.pyo' -delete
 
-          # Create the zip (QGIS expects content at LIRiAP/*)
           cd dist
           zip -r ../${ZIP_NAME} ${PLUGIN_DIR}/
           cd ..
@@ -70,14 +60,12 @@ jobs:
           echo "Built: ${ZIP_NAME}  ($(du -sh ${ZIP_NAME} | cut -f1))"
           echo "zip_name=${ZIP_NAME}" >> $GITHUB_ENV
 
-      # ── generate a changelog from git log since the previous tag ──────────
       - name: Generate changelog
-        id: changelog
         run: |
           PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]' | sed -n '2p')
           if [ -z "$PREV_TAG" ]; then
             PREV_TAG=$(git rev-list --max-parents=0 HEAD)
-            echo "No previous tag found – using initial commit as base."
+            echo "No previous tag – using initial commit."
           fi
           echo "## What's changed since ${PREV_TAG}" > CHANGELOG_FRAGMENT.md
           git log ${PREV_TAG}..HEAD \
@@ -86,7 +74,6 @@ jobs:
           echo "" >> CHANGELOG_FRAGMENT.md
           cat CHANGELOG_FRAGMENT.md
 
-      # ── create the GitHub Release and attach the zip ──────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -99,7 +86,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── summary ───────────────────────────────────────────────────────────
       - name: Job summary
         run: |
           echo "### Release ${{ steps.version.outputs.tag }} published" >> $GITHUB_STEP_SUMMARY
