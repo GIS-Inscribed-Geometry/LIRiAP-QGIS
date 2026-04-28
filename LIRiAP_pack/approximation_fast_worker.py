@@ -423,13 +423,21 @@ def process_slice(job_array, start, end,
                   angle_step, grid_coarse, grid_fine,
                   max_ratio, buf_enabled, buf_value):
     """
-    Process job_array[start:end] in this thread/process.
+    Process a slice of job_array in this thread/process.
 
-    job_array  : list of (feat_id, wkb_bytes) — shared, never copied
-    start, end : half-open slice indices into job_array
+    Parameters
+    ----------
+    job_array : list
+        List of (feat_id, wkb_bytes) tuples.
+    start : int
+        Start index (inclusive).
+    end : int
+        End index (exclusive).
 
-    Returns a dict  {feat_id: (wkt, area, angle, ratio)}
-    Built in one pass with no intermediate lists; caller does dict.update().
+    Returns
+    -------
+    dict
+        {feat_id: (wkt, area, angle, ratio)}
     """
     out = {}
     for i in range(start, end):

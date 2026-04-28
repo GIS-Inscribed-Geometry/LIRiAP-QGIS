@@ -69,7 +69,19 @@ def _safe_auto_install_context():
 
 def ensure_numba(feedback, attempt_install):
     """
-    Returns (available, installed_now).
+    Check for Numba availability and optionally install it.
+
+    Parameters
+    ----------
+    feedback : QgisFeedback
+        QGIS feedback object for user messages.
+    attempt_install : bool
+        If True, attempt to install Numba if not available.
+
+    Returns
+    -------
+    tuple
+        (available: bool, installed_now: bool)
     """
     # Fast path: Numba is already available in the active Python environment.
     if importlib.util.find_spec("numba") is not None:

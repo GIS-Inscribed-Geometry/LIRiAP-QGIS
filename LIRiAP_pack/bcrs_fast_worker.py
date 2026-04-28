@@ -1418,9 +1418,38 @@ def process_slice(job_array, start, end,
                   max_ratio, buf_enabled, buf_value,
                   top_k, always_return):
     """
-    Process job_array[start:end] in one worker and return:
-      ({feat_id: (wkt, area, angle, ratio, cand_rank, s2_gain, best_effort)},
-       best_effort_count)
+    Process a slice of job_array in one worker.
+
+    Parameters
+    ----------
+    job_array : list
+        List of (feat_id, wkb_bytes) tuples.
+    start : int
+        Start index (inclusive).
+    end : int
+        End index (exclusive).
+    angle_step : float
+        Angle step for fallback sweep.
+    grid_coarse : int
+        Coarse grid resolution.
+    grid_fine : int
+        Fine grid resolution.
+    max_ratio : float
+        Maximum aspect ratio (0 = unlimited).
+    buf_enabled : bool
+        Enable containment buffer.
+    buf_value : float
+        Buffer distance.
+    top_k : int
+        Number of candidates to keep.
+    always_return : bool
+        Enable best-effort fallback.
+
+    Returns
+    -------
+    tuple
+        (results: dict, best_effort_count: int)
+        results: {feat_id: (wkt, area, angle, ratio, cand_rank, s2_gain, best_effort)}
     """
     out = {}
     best_effort_count = 0

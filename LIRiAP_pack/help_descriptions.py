@@ -5,11 +5,12 @@ Shared user-facing descriptions for LIRiAP processing algorithms.
 _BASELINE = (
     "<div style='font-family:Segoe UI, Arial, sans-serif; font-size:10pt; line-height:1.35;'>"
     "<p><b>Problem framing</b><br/>"
-    "LIRiAP exposes three solver families with different guarantees:</p>"
+    "LIRiAP exposes four solver families with different guarantees:</p>"
     "<ul>"
     "<li><b>Approximation</b>: fast area-focused search, not strict containment-certified.</li>"
     "<li><b>Contained</b>: strict containment certification (optional best-effort fallback), no expansion stage.</li>"
     "<li><b>BCRS</b>: containment certification plus CABF boundary expansion; full target method in this plugin.</li>"
+    "<li><b>Axis-Aligned</b>: exact fixed-axis solution at vertex-coordinate precision.</li>"
     "</ul>"
     "<p>Concave polygons and polygons with holes are supported.</p>"
 )
@@ -130,6 +131,23 @@ _ALGORITHM_DETAILS = {
 
 
 def build_short_help(algorithm_title, algorithm_key, numba_available):
+    """
+    Build HTML help string for an algorithm.
+
+    Parameters
+    ----------
+    algorithm_title : str
+        Human-readable title for the algorithm.
+    algorithm_key : str
+        Key matching entries in _ALGORITHM_DETAILS.
+    numba_available : bool
+        Whether Numba JIT is available.
+
+    Returns
+    -------
+    str
+        HTML-formatted help string.
+    """
     details = _ALGORITHM_DETAILS[algorithm_key]
     return (
         f"{_BASELINE}"
