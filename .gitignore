@@ -43,5 +43,4 @@ Thumbs.db
 /tests/output/
 /visualisation/output/
 /visualisation/.numba_jit_cache/
-/media/
 /output/
