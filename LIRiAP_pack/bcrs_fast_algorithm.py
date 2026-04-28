@@ -1,9 +1,53 @@
 """
 LIRiAP BCRS Fast algorithm wrapper.
 
-This file keeps the geometric logic in `bcrs_fast_worker.py` and provides a
-consistent QGIS-facing interface for workers, chunking, and optional Numba
-bootstrap.
+Implements a QGIS Processing algorithm for the full contained-plus-expansion
+solve with optimized execution using trial ranking and limited Stage 4-5 runs.
+
+Algorithm Overview
+==================
+Wraps the geometric solver in ``bcrs_fast_worker.py`` with:
+- QGIS parameter handling
+- Trial ranking to prioritize angles
+- Limited expensive Stage 4-5 runs to strongest candidates
+- Reuses Stage 3 area cache
+- Optional Numba JIT bootstrap
+
+Execution Modes
+===============
+- Serial (N_WORKERS=1): Single-threaded (recommended for BCRS Fast)
+- Parallel (N_WORKERS>1): Per-feature parallel
+
+Output Fields
+=============
+- feat_id: Source feature ID
+- area: Rectangle area in CRS map units
+- angle_deg: Rotation angle in degrees
+- ratio: Aspect ratio (long:short)
+- cand_rank: Candidate rank (0=best)
+- s2_gain: Stage 2 area gain
+- s4_gain: Stage 4 (BCRS) area gain
+- s5_gain: Stage 5 (CABF) area gain
+- best_effort: 1 if fallback used, 0 otherwise
+
+Parameters
+==========
+GRID_COARSE    : Initial grid resolution
+GRID_FINE      : Refinement grid resolution
+ANGLE_STEP     : Fallback sweep step (degrees)
+TOP_K          : Candidates to refine
+MAX_RATIO      : Aspect ratio constraint (0=unlimited)
+ALWAYS_RETURN  : Enable best-effort fallback
+USE_BUFFER     : Apply containment buffer
+BUFFER_VALUE   : Buffer distance
+N_WORKERS      : Parallel workers (0=auto, 1=serial)
+USE_CHUNKING   : Chunked parallel mode
+AUTO_INSTALL_NUMBA: Auto-install Numba JIT
+
+See Also
+========
+bcrs_fast_worker: Geometric solver
+bcrs_algorithm: Non-optimized variant
 """
 
 import concurrent.futures as _cf

@@ -1,6 +1,6 @@
 # LIRiAP
 
-LIRiAP (Largest Inscribed Rectangle in Arbitary Polygon) is a set of QGIS Processing algorithms for computing the largest inscribed rectangles approximations for polygon features.
+LIRiAP (Largest Inscribed Rectangle in Arbitrary Polygon) is a set of QGIS Processing algorithms for computing the largest inscribed rectangles approximations for polygon features.
 
 ## Problem statement
 
@@ -9,6 +9,7 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 1. **Approximation family**: maximize area quickly, without strict containment certification. Good for finding candidates
 2. **Contained family**: enforce containment certification, but do not run boundary expansion after certification.
 3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF) - contain & extend. This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target. Best for finding results closer to solves on more limited set of features.
+4. **Axis-Aligned family**: exact fixed-axis solve with vertex-coordinate precision. Solves axis-aligned LIR directly without approximation.
 
 ## Result screenshots (constrained to 16:10 resolution)
 
@@ -36,6 +37,8 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 - **Remote sensing**: derive stable interior rectangular patches for spectral sampling, calibration windows, texture statistics, and object-level summaries where centroid or full-polygon sampling is noisy.
 - **Dynamic cartographic label placement**: place labels in the largest interior rectangle instead of using only centroid or bounding box, improving readability in concave polygons and polygons with holes. An axis-aligned version could be fast enough to handle this task.
 - **Other scenarios**: map tiling anchors, drone landing-zone preselection, interior ROI extraction for QA workflows, and standardized shape descriptors for downstream analytics.
+- **Computer vision**: find maximum rectangular regions of interest within arbitrary shaped detection masks
+- **Game development**: calculate valid placement areas for rectangular game objects within complex terrain polygons
 
 The less the features the denser the grid can be whilst still maintaining reasonable accuracy.
 
@@ -45,7 +48,7 @@ The ideas in this pack could potentially be used to get solutions for other cont
 
 ## At a glance
 
-From the fastest to slowest. BCRS without multhreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements (time of processing vs accuracy).
+From the fastest to slowest. BCRS without multithreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements (time of processing vs accuracy).
 
 
 | Family        | Primary objective                            | Strict containment               | Boundary expansion |
@@ -53,6 +56,7 @@ From the fastest to slowest. BCRS without multhreaded processing is usually the 
 | Approximation | Fast area-focused search                     | No                               | No                 |
 | Contained     | Certified contained rectangle search         | Yes (unless fallback is enabled) | No                 |
 | BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (CABF)         |
+| Axis-Aligned  | Exact fixed-axis solve                       | Yes (vertex-coordinate)          | N/A                |
 
 Best execution mode by algorithm (@290 @5406 are number of run features in a dataset):
 
@@ -67,6 +71,7 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 | BCRS (strict)                 | 1w             | 1w              |
 | BCRS (fallback)               | 1w             | 1w              |
 | BCRS Fast (fallback)          | 1w             | 1w              |
+| Axis-Aligned LIR              | 1w             | 1w              |
 
 ## Shared components
 
@@ -77,6 +82,7 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 3. **Rectangle solve in rotated frame**: solve axis-aligned rectangle candidates on a rotated polygon to recover non axis aligned solutions in map coordinates.
 4. **Refinement and checks**: apply finer search and containment-related adjustments (depending on variant).
 5. **Output**: write rectangle geometry and metrics (area, angle, ratio, and variant-specific diagnostics).
+
 
 ## Algorithms
 
@@ -89,6 +95,7 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 | Contained Fast                                          | Same as Contained Standard with optimized execution          | Same certified/best-effort semantics as Standard                                                        | No expansion stage after certification                             |
 | BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | Includes CABF boundary expansion (full target method in this pack) |
 | BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | Includes CABF boundary expansion                                   |
+| Axis-Aligned LIR                                        | Exact fixed-axis solve                                      | Exact (vertex-coordinate precision)                                                                    | N/A                                                                |
 
 ## Setting semantics
 
@@ -112,16 +119,17 @@ Benchmarked with:
 ### Baseline profile (N_WORKERS=1, USE_CHUNKING=False)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
 | ------- | ---------------------- | ------------------------ | ----------------------------------- | --------------- | ------------------------ |
 | P1      | Approximation Standard | n/a                      | 7.13*                               | 127.25          | 17.8471                  |
 | P2      | Approximation Fast     | n/a                      | 6.98*                               | 125.93          | 18.0415                  |
 | P3      | Contained Standard     | False (strict)           | 30.45                               | 574.13          | 18.8548                  |
 | P4      | Contained Standard     | True (fallback enabled)  | 30.75                               | 573.59          | 18.6533                  |
-| P5      | Contained Fast         | True (fallback enabled) | 12.25*                              | 226.05          | 18.4531                  |
+| P5      | Contained Fast         | True (fallback enabled) | 12.25*                              | 226.05          | 18.4531                  |
 | P6      | BCRS                   | False (strict)           | 42.91                               | 772.05          | 17.9923                  |
 | P7      | BCRS                   | True (fallback enabled)  | 42.35                               | 788.03          | 18.6076                  |
 | P8      | BCRS Fast              | True (fallback enabled)  | 23.61                               | 445.01          | 18.8484                  |
+| P9      | Axis-Aligned LIR       | True (fallback enabled)  | 11.81                               | 120.24          | 10.1812                  |
 
 ### Parallel profile (N_WORKERS=12, USE_CHUNKING=False)
 
@@ -132,24 +140,26 @@ Benchmarked with:
 | P2      | Approximation Fast     | n/a                      | 5.90*                              | 108.43          | 18.3780                  |
 | P3      | Contained Standard     | False (strict)           | 22.27                              | 405.91          | 18.2268                  |
 | P4      | Contained Standard     | True (fallback enabled)  | 22.05                              | 410.21          | 18.6036                  |
-| P5      | Contained Fast         | True (fallback enabled) | 12.03*                             | 224.82          | 18.6883                  |
+| P5      | Contained Fast         | True (fallback enabled) | 12.03*                             | 224.82          | 18.6883                  |
 | P6      | BCRS                   | False (strict)           | 51.83                              | 925.01          | 17.8470                  |
 | P7      | BCRS                   | True (fallback enabled)  | 50.88                              | 941.69          | 18.5081                  |
-| P8      | BCRS Fast              | True (fallback enabled)  | 29.84                              | 557.11          | 18.6699                  |
+| P8      | BCRS Fast              | True (fallback enabled) | 29.84                              | 557.11          | 18.6699                  |
+| P9      | Axis-Aligned LIR       | True (fallback enabled)  | 14.83                              | 158.53          | 10.6897                  |
 
 ### Parallel + chunking profile (N_WORKERS=12, USE_CHUNKING=True)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average<br />**too slow to be measure | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ------------------------ | ---------------------------------------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | n/a                      | 6.04*                                                            | 109.76          | 18.1722                  |
-| P2      | Approximation Fast     | n/a                      | 5.90*                                                            | 108.43          | 18.3780                  |
-| P3      | Contained Standard     | False (strict)           | 21.98                                                            | 405.95          | 18.4691                  |
-| P4      | Contained Standard     | True (fallback enabled)  | 21.96                                                            | 405.15          | 18.4495                  |
-| P5      | Contained Fast         | True (fallback enabled) | 12.01*                                                           | 224.82          | 18.7194                  |
-| P6      | BCRS                   | False (strict)           | 51.10                                                            | **              |                          |
-| P7      | BCRS                   | True (fallback enabled)  | 51.30                                                            | **              |                          |
-| P8      | BCRS Fast              | True (fallback enabled)  | 30.19                                                            | **              |                          |
+| Profile | Algorithm              | ALWAYS_RETURN            | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| ------- | ---------------------- | ------------------------ | ---------------------------------- | --------------- | ------------------------ |
+| P1      | Approximation Standard | n/a                      | 6.04*                              | 109.76          | 18.1722                  |
+| P2      | Approximation Fast     | n/a                      | 5.90*                              | 108.43          | 18.3780                  |
+| P3      | Contained Standard     | False (strict)           | 21.98                              | 405.95          | 18.4691                  |
+| P4      | Contained Standard     | True (fallback enabled)  | 21.96                              | 405.15          | 18.4495                  |
+| P5      | Contained Fast         | True (fallback enabled) | 12.01*                             | 224.82          | 18.7194                  |
+| P6      | BCRS                   | False (strict)           | 51.10                              | **              |                          |
+| P7      | BCRS                   | True (fallback enabled)  | 51.30                              | **              |                          |
+| P8      | BCRS Fast              | True (fallback enabled)  | 30.19                              | **              |                          |
+| P9      | Axis-Aligned LIR       | True (fallback enabled) | 14.91                              | 157.89          | 10.5912                  |
 
 ### Derived statistics (formula-based comparison)
 
@@ -171,6 +181,7 @@ Use these symbols per profile:
 | P6      | BCRS (strict)                 | 0.9879                                                    | 0.9851                                                        | 0.8279                                           | 0.0690                                          | 0.8346                                               | 0.0696                                             | 0.0141                                                    | n/a                                                            |
 | P7      | BCRS (fallback)               | 0.9994                                                    | 0.9975                                                        | 0.8324                                           | 0.0694                                          | 0.8368                                               | 0.0697                                             | -0.0083                                                   | n/a                                                            |
 | P8      | BCRS Fast (fallback)          | 1.0038                                                    | 1.0005                                                        | 0.7912                                           | 0.0659                                          | 0.7988                                               | 0.0666                                             | -0.0117                                                   | n/a                                                            |
+| P9      | Axis-Aligned LIR              | 1.0058                                                    | 1.0067                                                        | 0.7961                                           | 0.0663                                          | 0.7586                                               | 0.0632                                             | -0.0054                                                   | -0.0040                                                        |
 
 
 | Profile | Algorithm                     | Throughput @290 (best mode),`Q290 = 290 / min(T1_290,T12_290,T12c_290)` | Throughput @5406 (best mode),`Q5406 = 5406 / min(T1_5406,T12_5406,T12c_5406)` | Throughput scaling,`Q5406/Q290` | Best mode @290 | Best mode @5406 |
@@ -183,6 +194,7 @@ Use these symbols per profile:
 | P6      | BCRS (strict)                 | 6.7583                                                                  | 7.0021                                                                        | 1.0361                          | 1w             | 1w              |
 | P7      | BCRS (fallback)               | 6.8477                                                                  | 6.8601                                                                        | 1.0018                          | 1w             | 1w              |
 | P8      | BCRS Fast (fallback)          | 12.2829                                                                 | 12.1480                                                                       | 0.9890                          | 1w             | 1w              |
+| P9      | Axis-Aligned LIR             | 24.5560                                                                 | 45.0440                                                                       | 1.8345                          | 1w             | 1w              |
 
 ## Detailed algorithm breakdown
 
@@ -318,6 +330,32 @@ flowchart TD
 4. Keeps the same containment, fallback, and output semantics as BCRS Standard.
 5. **Semantics**: identical to BCRS Standard.
 
+### Axis-Aligned LIR
+
+```mermaid
+flowchart TD
+    A[Input polygon] --> B[Detect polygon type]
+    B --> C{Convex, no holes?}
+    C -- Yes --> D[Alt/Amenta O(n²) solver]
+    C -- No --> E[Daniels et al. vertex-grid solver]
+    D --> F[Epsilon-inset certification]
+    E --> F
+    F --> G[Apply max_ratio constraint]
+    G --> H[Optional axis rotation]
+    H --> I[Output exact rectangle]
+```
+
+1. Detect polygon type: convex/concave, with/without holes.
+2. Dispatch to appropriate solver:
+   - Convex no holes: Alt/Amenta O(n²) vertex-pair enumeration
+   - All others: Daniels et al. O(n²) vertex-coordinate-grid + LRH scanline
+3. Run exact solver at vertex-coordinate precision.
+4. Apply epsilon-inset certification for containment guarantee.
+5. Apply optional max_ratio constraint.
+6. Apply optional axis rotation (AXIS_ANGLE parameter).
+7. Output exact rectangle.
+8. **Semantics**: guaranteed exact solution at vertex-coordinate precision. No approximation.
+
 ## Folder layout
 
 - `LIRiAP_pack/*_algorithm.py`: QGIS Processing wrappers (parameters, execution, output fields, help text).
@@ -373,6 +411,12 @@ $$
 T_{cert} = \Theta(n), \quad T_{shrink} = \Theta(n)
 $$
 
+**Axis-Aligned solvers** (Alt/Amenta, Daniels et al.)
+
+$$
+T_{axis} = \Theta(n^2), \quad M_{axis} = \Theta(n^2)
+$$
+
 ### Per-feature worst-case complexity by algorithm
 
 Pipeline composition (generic):
@@ -396,6 +440,7 @@ $$
 | Contained Fast         | $O\left(n + (m+s_{90})g_{coarse}^2 + k\left(pg_{coarse}^2 + g_{fine}^2 + n\right)\right)$                        | $O\left(\max(g_{coarse}^2,g_{fine}^2)\right)$ |
 | BCRS                   | $O\left(n + (m+s_{90})g_{coarse}^2 + k\left(pg_{coarse}^2 + t(g_{fine}^2 + n\log n + \nu + n) + n\right)\right)$ | $O\left(\max(g_{fine}^2,\nu)\right)$          |
 | BCRS Fast              | $O\left(n + (m+s_{90})g_{coarse}^2 + k\left((p+4)g_{coarse}^2 + t(n\log n + \nu + n) + n\right)\right),\ t\le2$  | $O\left(\max(g_{coarse}^2,\nu)\right)$        |
+| Axis-Aligned LIR       | $O(n^2)$ (vertex-pair enumeration or vertex-coordinate grid)                                                     | $O(n^2)$                                      |
 
 ### Why Fast variants are faster (math-level deltas)
 
@@ -417,6 +462,7 @@ Defaults used for this calculation:
 
 - Approximation family: $g_{coarse}=40$, $g_{fine}=100$, single refined candidate ($k=1$ effective), `ANGLE_STEP` $=5$.
 - Contained/BCRS families: $g_{coarse}=40$, $g_{fine}=120$, $k=3$, `ANGLE_STEP` $=5$.
+- Axis-Aligned: $g_{fine}=120$ (fallback), exact solver O(n²).
 
 Hence $s_{180}=36$, $s_{90}=18$, and $40^2=1600$, $100^2=10000$, $120^2=14400$.
 
@@ -430,6 +476,7 @@ Using $p=60$, $k=1$ effective for Approximation, $k=3$ for Contained/BCRS, $t\le
 | Contained Fast                | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 14400) = 379200$ grid-units                                                   |
 | BCRS                          | $(12+18)\cdot1600 + 3\cdot(60\cdot1600 + 4\cdot(14400 + 89401)) \approx 1581612$ plus certification/CABF geometry cost |
 | BCRS Fast                     | $(12+18)\cdot1600 + 3\cdot((60+4)\cdot1600 + 2\cdot89401) \approx 891606$ plus certification/CABF geometry cost        |
+| Axis-Aligned LIR              | $O(n^2)$ — depends on vertex count, not grid resolution                                                              |
 
 Mind that these are complexity-weighted operation counts, not wall-clock predictions.
 
@@ -449,5 +496,22 @@ Using baseline 5406-feature wall times (`N_WORKERS=1`, no chunking):
 | Contained Fast vs Standard     | Fast should be lower                 | $226.05s < 574.13s$    | consistent |
 | BCRS Fast vs BCRS              | Fast should be lower                 | $445.01s < 772.05s$    | consistent |
 | Contained Standard vs BCRS     | model estimate favors BCRS           | $574.13s < 772.05s$    | mismatch   |
+| Axis-Aligned vs BCRS Fast      | Lower due to simpler algorithm       | $120.24s < 445.01s$    | consistent |
 
 The model seems to capture intra-family speed relations well; cross-family ordering can remain sensitive to solver semantics, settings, and constant factors not captured by asymptotic terms.
+
+## Documentation
+
+See `docs/` directory for detailed documentation:
+
+- **Algorithms**: [docs/algorithms/](algorithms/) — Family overviews and flowcharts
+- **Theory**: [docs/theory/](theory/) — Complexity analysis and foundations
+- **Reference**: [docs/reference/](reference/) — Parameters, folder layout, programmatic usage
+
+### Key Docs
+
+- [Algorithm Overview](docs/algorithms/overview.md)
+- [Axis-Aligned LIR](docs/algorithms/axis-aligned.md)
+- [Complexity Analysis](docs/theory/complexity.md)
+- [Parameter Reference](docs/reference/parameters.md)
+- [Programmatic Usage](docs/reference/usage.md)

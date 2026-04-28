@@ -41,5 +41,7 @@ Thumbs.db
 /lir_solver/target/
 /lir_solver/.venv/
 /tests/output/
-/visualisation/output/liriap_output/
-/visualisation/output/visualize_steps/
+/visualisation/output/
+/visualisation/.numba_jit_cache/
+/media/
+/output/

@@ -1,22 +1,49 @@
 """
-LIRiAP BCRS worker module.
+LIRiAP BCRS (Boundary-Coordinate Raster Solve) worker module.
 
-Implements BCRS/CABF-based geometry solving and is intentionally independent
-from QGIS/Qt runtime objects.
+Pure geometry solver for full contained-plus-expansion rectangle search.
+No QGIS or Qt runtime dependencies.
 
-Pipeline overview:
-Stage 1 geometry preparation ->
-Stage 2 heuristic candidates ->
-Stage 3 angle refinement ->
-Stage 4 BCRS boundary-coordinate solve ->
-Stage 5 clamped CABF expansion ->
-Stage 6 containment certification/fallback ->
-Stage 7 selection and output.
+Pipeline
+=======
+Stage 1: Geometry preparation - validate, normalize multipart, precision snap
+Stage 2: Heuristic candidates - edge-orientation histogram, convex hull bound, coarse grid
+Stage 3: Angle refinement - bounded Brent optimization around candidates
+Stage 4: BCRS solve - boundary-coordinate grid + variable-pitch LRH solver
+Stage 5: CABF expansion - coordinate-ascent boundary fitting
+Stage 6: Containment certification - verify and shrink if needed
+Stage 7: Selection - choose best certified candidate, compute diagnostics
+
+Novel Contributions
+===================
+- BCRS: Boundary-coordinate raster solve using polygon vertices as grid lines
+- Variable-pitch LRH: Histogram solver adapting to boundary coordinate distribution
+- CABF: Coordinate-Ascent Boundary Fitting for boundary expansion
+
+Algorithm Semantics
+===================
+This is the only algorithm family that combines containment certification
+with explicit boundary expansion. Strict containment or best-effort fallback.
+
+Complexity
+==========
+O(n + (m+s90)*g_coarse^2 + k*(p*g_coarse^2 + t*(g_fine^2 + n log n + nu + n) + n))
+
+References
+==========
+Daniels et al. (1997): Finding the largest axis-aligned rectangle in a polygon
+Bentley (1977): Programming Pearls - Fast Algorithms for Polygon Containment
+
+See Also
+========
+bcrs_algorithm: QGIS wrapper
+bcrs_fast_worker: Optimized variant
 """
 
 from __future__ import annotations
 
 import math
+import time
 
 import numpy as np
 from scipy.optimize import minimize_scalar
@@ -322,7 +349,7 @@ def _solve_axis_rect_bcrs(rot_poly, seed_bounds, max_ratio):
 # ==========================================================================
 # ④ CLAMPED CABF
 # ==========================================================================
-def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio):
+def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio, emitter=None):
     """
     Coordinate-Ascent Boundary Fitting with vertex clamping.
 
@@ -389,7 +416,20 @@ def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio):
                 lo_d = mid
             else:
                 hi_d = mid
+        old_x0 = x0
         x0 -= lo_d
+        if emitter and abs(x0 - old_x0) > 1e-12:
+            emitter.emit(
+                phase="BCRS_SOLVE", type_="bcrs_boundary_expand",
+                label=f"Left: {old_x0:.2f} -> {x0:.2f}",
+                narration="Left side expanded to polygon boundary.",
+                side="left",
+                from_coord=round(old_x0, 4),
+                to_coord=round(x0, 4),
+                rect_after=[round(x0, 4), round(y0, 4),
+                            round(x1, 4), round(y1, 4)],
+                area_after=round((x1 - x0) * (y1 - y0), 4),
+            )
 
         # Right (clamped)
         lo_d, hi_d = 0.0, maxx - x1
@@ -399,7 +439,20 @@ def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio):
                 lo_d = mid
             else:
                 hi_d = mid
+        old_x1 = x1
         x1 = min(x1 + lo_d, _next_x(x1 + lo_d))
+        if emitter and abs(x1 - old_x1) > 1e-12:
+            emitter.emit(
+                phase="BCRS_SOLVE", type_="bcrs_boundary_expand",
+                label=f"Right: {old_x1:.2f} -> {x1:.2f}",
+                narration="Right side expanded to polygon boundary.",
+                side="right",
+                from_coord=round(old_x1, 4),
+                to_coord=round(x1, 4),
+                rect_after=[round(x0, 4), round(y0, 4),
+                            round(x1, 4), round(y1, 4)],
+                area_after=round((x1 - x0) * (y1 - y0), 4),
+            )
 
         # Bottom
         lo_d, hi_d = 0.0, y0 - miny
@@ -409,7 +462,20 @@ def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio):
                 lo_d = mid
             else:
                 hi_d = mid
+        old_y0 = y0
         y0 -= lo_d
+        if emitter and abs(y0 - old_y0) > 1e-12:
+            emitter.emit(
+                phase="BCRS_SOLVE", type_="bcrs_boundary_expand",
+                label=f"Bottom: {old_y0:.2f} -> {y0:.2f}",
+                narration="Bottom side expanded to polygon boundary.",
+                side="bottom",
+                from_coord=round(old_y0, 4),
+                to_coord=round(y0, 4),
+                rect_after=[round(x0, 4), round(y0, 4),
+                            round(x1, 4), round(y1, 4)],
+                area_after=round((x1 - x0) * (y1 - y0), 4),
+            )
 
         # Top (clamped)
         lo_d, hi_d = 0.0, maxy - y1
@@ -419,7 +485,20 @@ def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio):
                 lo_d = mid
             else:
                 hi_d = mid
+        old_y1 = y1
         y1 = min(y1 + lo_d, _next_y(y1 + lo_d))
+        if emitter and abs(y1 - old_y1) > 1e-12:
+            emitter.emit(
+                phase="BCRS_SOLVE", type_="bcrs_boundary_expand",
+                label=f"Top: {old_y1:.2f} -> {y1:.2f}",
+                narration="Top side expanded to polygon boundary.",
+                side="top",
+                from_coord=round(old_y1, 4),
+                to_coord=round(y1, 4),
+                rect_after=[round(x0, 4), round(y0, 4),
+                            round(x1, 4), round(y1, 4)],
+                area_after=round((x1 - x0) * (y1 - y0), 4),
+            )
 
     # Ratio constraint (analytical, from centre)
     if max_ratio > 0.0:
@@ -522,7 +601,7 @@ def _simplify_for_solve(poly):
 # ⑥ STAGE 1 — HEURISTIC CANDIDATE GENERATOR
 # ==========================================================================
 def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
-                          max_ratio, top_k):
+                          max_ratio, top_k, emitter=None):
     centroid = poly.centroid
     cx, cy = centroid.x, centroid.y
     hull = poly.convex_hull
@@ -536,11 +615,42 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
                            origin=centroid, use_radians=False)
         return _solve_axis_rect_grid(rot_s, grid_coarse, max_ratio)
 
-    for angle in _edge_candidate_angles(poly):
+    edge_angles = _edge_candidate_angles(poly)
+    if emitter:
+        emitter.emit(
+            phase="CANDIDATES", type_="edge_angles_found",
+            label=f"{len(edge_angles)} edge angles",
+            narration="Edge-direction angles extracted from polygon boundary.",
+            angles_deg=edge_angles.tolist(),
+            edge_lengths=[],
+            smoothed=True,
+        )
+
+    for angle in edge_angles:
         a = float(angle)
         ub = _upper_bound_area(hull, a, max_ratio, centroid)
         if ub <= best_area * _PRUNE_MARGIN:
+            if emitter:
+                emitter.emit(
+                    phase="CANDIDATES", type_="upper_bound_computed",
+                    label=f"Angle {a:.1f}° pruned",
+                    narration="Upper bound below current best; angle pruned.",
+                    angle_deg=a,
+                    upper_bound=round(ub, 4),
+                    pruned=True,
+                    prune_threshold=round(best_area * _PRUNE_MARGIN, 4),
+                )
             continue
+        if emitter:
+            emitter.emit(
+                phase="CANDIDATES", type_="upper_bound_computed",
+                label=f"Angle {a:.1f}° UB={ub:.1f}",
+                narration="Upper bound exceeds current best; evaluating angle.",
+                angle_deg=a,
+                upper_bound=round(ub, 4),
+                pruned=False,
+                prune_threshold=round(best_area * _PRUNE_MARGIN, 4),
+            )
         rect, area = _solve_coarse(a)
         if area > 0:
             raw.append((area, a, rect))
@@ -571,6 +681,19 @@ def _heuristic_candidates(poly, angle_step, grid_coarse, grid_fine,
         seen.append(angle)
         rect_world = shp_rotate(rect_rot, angle,
                                 origin=centroid, use_radians=False)
+        if emitter:
+            rect_bounds = rect_world.bounds
+            emitter.emit(
+                phase="CANDIDATES", type_="candidate_found",
+                label=f"Cand {len(kept)}: {angle:.1f}° area={area:.1f}",
+                narration=f"Candidate rectangle at {angle:.1f}°.",
+                angle_deg=round(angle, 4),
+                rect=[float(rect_bounds[0]), float(rect_bounds[1]),
+                      float(rect_bounds[2]), float(rect_bounds[3])],
+                area=round(float(area), 4),
+                source="grid",
+                rank=len(kept),
+            )
         kept.append({
             'angle': angle,
             'area': area,
@@ -809,7 +932,7 @@ def _best_effort_shrink_to_cover(poly, rect, max_ratio,
 # ==========================================================================
 # ⑪ BCRS+CABF AT A GIVEN ANGLE
 # ==========================================================================
-def _bcrs_cabf_at_angle(rot_poly, seed_bounds, max_ratio):
+def _bcrs_cabf_at_angle(rot_poly, seed_bounds, max_ratio, angle_deg=0.0, emitter=None):
     """
     Stage 4 + Stage 5 in the already-rotated frame:
     run BCRS boundary-coordinate solve, then clamped CABF expansion.
@@ -829,11 +952,46 @@ def _bcrs_cabf_at_angle(rot_poly, seed_bounds, max_ratio):
     if bcrs_area <= 0:
         return None, 0.0
 
+    if emitter:
+        sb = bcrs_rect.bounds
+        emitter.emit(
+            phase="BCRS_SOLVE", type_="bcrs_seed_set",
+            label=f"BCRS seed area={bcrs_area:.1f}",
+            narration=f"BCRS seed bounding box for angle {angle_deg:.1f}°.",
+            angle_deg=round(angle_deg, 4),
+            seed_bounds=[round(sb[0], 4), round(sb[1], 4),
+                         round(sb[2], 4), round(sb[3], 4)],
+            seed_area=round(bcrs_area, 4),
+        )
+
     bx0, by0, bx1, by1 = bcrs_rect.bounds
+    if emitter:
+        emitter.emit(
+            phase="CABF", type_="cabf_iteration_started",
+            label="CABF expansion",
+            narration="Clamped ABFR expansion starting.",
+            iteration=0,
+            rect_in=[round(bx0, 4), round(by0, 4),
+                     round(bx1, 4), round(by1, 4)],
+            area_in=round((bx1 - bx0) * (by1 - by0), 4),
+        )
+
     bx0, by0, bx1, by1 = _expand_rect_to_boundary(
-        rot_poly, bx0, by0, bx1, by1, max_ratio)
+        rot_poly, bx0, by0, bx1, by1, max_ratio, emitter=emitter)
 
     area = (bx1 - bx0) * (by1 - by0)
+    if emitter:
+        emitter.emit(
+            phase="CABF", type_="cabf_iteration_done",
+            label=f"CABF done: area={area:.1f}",
+            narration="Clamped ABFR expansion iteration completed.",
+            iteration=0,
+            rect_out=[round(bx0, 4), round(by0, 4),
+                      round(bx1, 4), round(by1, 4)],
+            area_out=round(area, 4),
+            delta_area=round(area - bcrs_area, 4),
+        )
+
     if area <= 0:
         return None, 0.0
     return box(bx0, by0, bx1, by1), area
@@ -844,7 +1002,8 @@ def _bcrs_cabf_at_angle(rot_poly, seed_bounds, max_ratio):
 # ==========================================================================
 def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
                            max_ratio, buf_enabled, buf_value,
-                           always_return, prepared_poly=None):
+                           always_return, prepared_poly=None,
+                           emitter=None):
     """
     Stage 3-7 orchestrator for each Stage 2 candidate:
     Stage 3 angle refinement -> Stage 4 BCRS -> Stage 5 CABF ->
@@ -895,7 +1054,8 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
 
             # BCRS + Clamped CABF
             rect_rot, area_rot = _bcrs_cabf_at_angle(
-                rot_poly, seed_bounds, max_ratio)
+                rot_poly, seed_bounds, max_ratio,
+                angle_deg=angle_try, emitter=emitter)
 
             if rect_rot is None or area_rot <= 0:
                 continue
@@ -928,9 +1088,53 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
             }
 
         # Phase C: certification
+        if emitter:
+            emitter.emit(
+                phase="CERT", type_="cert_started",
+                label="Certification",
+                narration="Verifying rectangle containment.",
+                rect=[float(best_raw_r.bounds[0]), float(best_raw_r.bounds[1]),
+                      float(best_raw_r.bounds[2]), float(best_raw_r.bounds[3])],
+                area=round(best_raw_a, 4),
+                method="covers",
+            )
+
         best_r, best_a = _certify_and_adjust(
             poly, best_raw_r, max_ratio, False, 0.0, prepared_poly)
         used_best_effort = False
+
+        if best_r is not None:
+            if emitter:
+                emitter.emit(
+                    phase="CERT", type_="cert_passed",
+                    label="Cert passed",
+                    narration="Rectangle fully inside polygon.",
+                    rect=[float(best_r.bounds[0]), float(best_r.bounds[1]),
+                          float(best_r.bounds[2]), float(best_r.bounds[3])],
+                    area=round(best_a, 4),
+                    inset=round(best_raw_a - best_a, 6),
+                )
+        elif always_return:
+            if emitter:
+                emitter.emit(
+                    phase="CERT", type_="cert_failed_shrink",
+                    label="Cert failed, shrinking",
+                    narration="Shrinking rectangle for containment.",
+                    attempt=1,
+                    rect_before=[float(best_raw_r.bounds[0]),
+                                 float(best_raw_r.bounds[1]),
+                                 float(best_raw_r.bounds[2]),
+                                 float(best_raw_r.bounds[3])],
+                    rect_after=[0, 0, 0, 0],
+                    eps=1e-7,
+                )
+                emitter.emit(
+                    phase="CERT", type_="cert_fallback",
+                    label="Fallback invoked",
+                    narration="Best-effort shrink fallback.",
+                    reason="shrink_exhausted",
+                    fallback="best_effort_shrink",
+                )
 
         if best_r is None and always_return:
             best_r, best_a = _best_effort_shrink_to_cover(
@@ -950,6 +1154,23 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
                 best_r, best_a = best_r2, best_a2
             else:
                 continue
+
+        if emitter:
+            poly_area = float(poly.area)
+            pct = (best_a / poly_area * 100) if poly_area > 0 else 0.0
+            emitter.emit(
+                phase="RESULT", type_="best_updated",
+                label=f"Best: area={best_a:.1f} ({pct:.1f}%)",
+                narration="New best rectangle after BCRS+CABF.",
+                rect=[float(best_r.bounds[0]), float(best_r.bounds[1]),
+                      float(best_r.bounds[2]), float(best_r.bounds[3])],
+                area=round(best_a, 4),
+                pct_polygon=round(pct, 2),
+                angle_deg=round(best_angle_this, 4),
+                source="BCRS",
+                prev_area=round(emitter._best_area, 4),
+            )
+            emitter._best_area = best_a
 
         if buf_enabled and buf_value != 0.0:
             cand_buf = best_r.buffer(buf_value, cap_style=3, join_style=2)
@@ -1044,7 +1265,7 @@ def _prepare_polygon(geom):
 # ==========================================================================
 # ⑭ PUBLIC ENTRY POINT
 # ==========================================================================
-def _worker_process_feature(args):
+def _worker_process_feature(args, emitter=None):
     """
     Stateless worker — safe for ThreadPoolExecutor and ProcessPoolExecutor.
 
@@ -1053,6 +1274,8 @@ def _worker_process_feature(args):
     args : tuple
         (feat_id, wkb_bytes, angle_step, grid_coarse, grid_fine,
          max_ratio, buf_enabled, buf_value, top_k, always_return)
+    emitter : TraceEmitter or None
+        Optional event emitter for visualisation traces.
 
     Returns
     -------
@@ -1082,22 +1305,59 @@ def _worker_process_feature(args):
         if poly is None or poly.is_empty:
             return None
 
+        if emitter:
+            ext_coords = [[float(x), float(y)] for x, y in poly.exterior.coords[:-1]]
+            hole_coords = [[[float(x), float(y)] for x, y in r.coords[:-1]] for r in poly.interiors]
+            emitter.emit(
+                phase="SETUP", type_="polygon_loaded",
+                label="Polygon loaded",
+                narration="Polygon loaded for BCRS solve.",
+                exterior=ext_coords,
+                holes=hole_coords,
+                bbox=[float(poly.bounds[0]), float(poly.bounds[1]),
+                      float(poly.bounds[2]), float(poly.bounds[3])],
+                area=float(poly.area),
+                vertex_count=len(poly.exterior.coords) - 1,
+                poly_type="concave_no_holes",
+                is_valid=poly.is_valid,
+            )
+
         prepared_poly = _make_prepared(poly)
 
         candidates = _heuristic_candidates(
-            poly, angle_step, grid_coarse, grid_fine, max_ratio, top_k)
+            poly, angle_step, grid_coarse, grid_fine, max_ratio, top_k,
+            emitter=emitter)
         if not candidates:
             return None
 
         result = _refine_best_candidate(
             poly, candidates, grid_coarse, grid_fine,
             max_ratio, buf_enabled, buf_value, always_return,
-            prepared_poly=prepared_poly)
+            prepared_poly=prepared_poly, emitter=emitter)
 
         if result is None:
             return None
 
         rect, area, angle, ratio, rank, gain, used_best_effort = result
+
+        if emitter:
+            rect_bounds = rect.bounds
+            poly_area = float(poly.area)
+            pct = (area / poly_area * 100) if poly_area > 0 else 0.0
+            emitter.emit(
+                phase="RESULT", type_="final_result",
+                label=f"Final: area={area:.1f} ({pct:.1f}%)",
+                narration="BCRS LIR solve complete.",
+                rect=[float(rect_bounds[0]), float(rect_bounds[1]),
+                      float(rect_bounds[2]), float(rect_bounds[3])],
+                area=round(float(area), 4),
+                pct_polygon=round(pct, 2),
+                angle_deg=round(float(angle), 4),
+                algorithm="bcrs_standard",
+                total_events=len(emitter.events),
+                elapsed_ms=round(time.monotonic() * 1000 - emitter._start_ms, 2),
+            )
+
         return (
             feat_id,
             rect.wkt,

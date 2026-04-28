@@ -1,10 +1,30 @@
+"""
+Test suite for numba_bootstrap module.
+
+Tests cover:
+- Fast path when Numba already available
+- No install when disabled
+- Safe context detection (venv/conda)
+- User-site writability checks
+- Timeout handling
+- Error messages
+
+Test Class
+==========
+TestNumbaBootstrap: All numba_bootstrap functions
+
+Running
+=======
+pytest tests/test_numba_bootstrap.py -v
+
+See Also
+========
+numba_bootstrap.py: Module under test
+"""
 import unittest
 from unittest.mock import MagicMock, patch
 
 from LIRiAP_pack import numba_bootstrap
-
-
-class _Feedback:
     def __init__(self):
         self.infos = []
         self.warnings = []

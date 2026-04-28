@@ -1,9 +1,54 @@
 """
 LIRiAP Contained Fast algorithm wrapper.
 
-This file keeps the geometric logic in `contained_fast_worker.py` and provides
-a consistent QGIS-facing interface for workers, chunking, and optional Numba
-bootstrap.
+Implements a QGIS Processing algorithm for certified contained rectangle search
+with optimized execution using reduced Stage 3-4 calls.
+
+Algorithm Overview
+==================
+Wraps the geometric solver in ``contained_fast_worker.py`` with:
+- QGIS parameter handling
+- Optimized execution path (reduced expensive operations)
+- Optional Numba JIT bootstrap
+
+Execution Modes
+===============
+- Serial (N_WORKERS=1): Single-threaded execution
+- Parallel (N_WORKERS>1): Slice-based parallel
+- Chunked (N_WORKERS>1 + USE_CHUNKING=True): Chunk-based parallel
+
+Output Fields
+=============
+- feat_id: Source feature ID
+- area: Rectangle area in CRS map units
+- angle_deg: Rotation angle in degrees
+- ratio: Aspect ratio (long:short)
+- cand_rank: Candidate rank (0=best)
+- s2_gain: Stage 2 area gain
+- best_effort: 1 if fallback used, 0 otherwise
+
+Parameters
+==========
+GRID_COARSE    : Initial grid resolution
+GRID_FINE      : Refinement grid resolution
+ANGLE_STEP     : Fallback sweep step (degrees)
+TOP_K          : Candidates to refine
+MAX_RATIO      : Aspect ratio constraint (0=unlimited)
+ALWAYS_RETURN  : Enable best-effort fallback
+USE_BUFFER     : Apply containment buffer
+BUFFER_VALUE   : Buffer distance
+N_WORKERS      : Parallel workers (0=auto, 1=serial)
+USE_CHUNKING   : Chunked parallel mode
+AUTO_INSTALL_NUMBA: Auto-install Numba JIT
+
+Semantics
+=========
+Same as Contained Standard: strict containment or best-effort fallback.
+
+See Also
+========
+contained_fast_worker: Geometric solver
+contained_standard_algorithm: Non-optimized variant
 """
 
 import concurrent.futures as _cf

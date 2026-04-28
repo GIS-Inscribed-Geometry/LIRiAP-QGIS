@@ -1,4 +1,26 @@
-import unittest
+"""
+Test suite for edge case handling in worker modules.
+
+Tests cover:
+- Edge candidate angle generation
+- Multipart polygon handling
+- Empty/degenerate geometry handling
+- Invalid parameter handling
+
+Test Classes
+============
+TestApproximationWorkerEdgeCases: Edge candidates, multipolygon handling
+TestContainedWorkerEdgeCases: Contained algorithm edge cases
+TestBCRSWorkerEdgeCases: BCRS algorithm edge cases
+
+Run
+===
+pytest tests/test_worker_edge_cases.py -v
+
+See Also
+========
+*_worker.py: Modules under test
+"""
 
 try:
     from shapely.geometry import MultiPolygon, Polygon

@@ -1,34 +1,57 @@
 """
 LIRiAP Axis-Aligned LIR algorithm wrapper.
 
+Implements a QGIS Processing algorithm for exact fixed-axis Largest Inscribed
+Rectangle solving with vertex-coordinate precision.
+
+Algorithm Overview
+==================
 Exposes the exact axis-aligned LIR worker (``axis_aligned_lir_worker``) as a
-QGIS Processing algorithm.  All geometric logic lives in the worker module;
-this file provides only the QGIS-facing parameter declaration, feature
-serialisation, parallel execution, and output writing — following the exact
-same pattern as ``bcrs_algorithm.py``.
+QGIS Processing algorithm.
 
-Algorithm summary
------------------
-Solves the Largest Inscribed Rectangle (LIR) problem under a fixed-axis
-(axis-aligned) orientation constraint.  Supports an optional AXIS_ANGLE
-parameter that rotates the "axis-aligned" frame before solving and rotates
-the result back, enabling tilted-but-rectangular inscribed rectangles.
+Four exact solvers dispatched based on polygon topology:
+- convex_no_holes: Alt/Amenta O(n²) vertex-pair enumeration
+- convex_with_holes / concave_no_holes / concave_with_holes:
+  Daniels et al. O(n²) vertex-coordinate-grid + LRH scanline
 
-Four exact solvers are dispatched based on polygon topology:
+Supports optional AXIS_ANGLE parameter to rotate the axis frame.
 
-* **convex_no_holes**  → Alt/Amenta O(n²) vertex-pair enumeration
-* **convex_with_holes / concave_no_holes / concave_with_holes**
-  → Daniels et al. O(n²) vertex-coordinate-grid + LRH scanline
+Execution Modes
+===============
+- Serial (N_WORKERS=1): Single-threaded execution
+- Parallel (N_WORKERS>1): Per-feature parallel
+- Chunked (N_WORKERS>1 + USE_CHUNKING=True): Chunk-based parallel
 
-Output fields
--------------
-feat_id     : int    — source feature ID
-area        : double — rectangle area in CRS map units²
-axis_angle  : double — axis angle used (degrees; echoes input parameter)
-poly_type   : string — one of convex_no_holes / convex_with_holes /
-                       concave_no_holes / concave_with_holes
-ratio       : double — actual long:short aspect ratio of output rectangle
-best_effort : int    — 1 if result came from the shrink fallback, else 0
+Output Fields
+=============
+- feat_id: Source feature ID
+- area: Rectangle area in CRS map units
+- axis_angle: Axis angle (echoes input)
+- poly_type: convex_no_holes / convex_with_holes / concave_no_holes / concave_with_holes
+- ratio: Aspect ratio (long:short)
+- best_effort: 1 if fallback used, 0 otherwise
+
+Parameters
+==========
+AXIS_ANGLE     : Rotation of axis-aligned frame (0=horizontal)
+GRID_FINE     : Fallback grid resolution (if vertices > 500)
+MAX_RATIO     : Aspect ratio constraint (0=unlimited)
+ALWAYS_RETURN : Enable best-effort fallback
+USE_BUFFER    : Apply containment buffer
+BUFFER_VALUE  : Buffer distance
+N_WORKERS     : Parallel workers (0=auto, 1=serial)
+USE_CHUNKING  : Chunked parallel mode
+AUTO_INSTALL_NUMBA: Auto-install Numba JIT
+
+References
+==========
+Alt & Amenta (1999): Convex polygon LIR
+Daniels et al. (1997): Axis-aligned rectangle in polygons
+Klingel (1986): Largest rectangle in histogram
+
+See Also
+========
+axis_aligned_lir_worker: Geometric solver
 """
 
 import concurrent.futures as _cf

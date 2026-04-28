@@ -13,6 +13,24 @@ Compares result size, failure rate, containment, and execution speed across:
 Data sources:
 - tests/real_world_data/test2.geojson
 - tests/real_world_data/test3.gpkg
+
+Test Functions
+==============
+test_axis_aligned_performance: Axis-Aligned LIR metrics
+test_contained_standard_performance: Contained Standard metrics
+test_contained_fast_performance: Contained Fast metrics
+test_bcrs_standard_performance: BCRS Standard metrics
+test_bcrs_fast_performance: BCRS Fast metrics
+test_approximation_standard_performance: Approximation Standard metrics
+test_approximation_fast_performance: Approximation Fast metrics
+
+Running
+=======
+pytest tests/test_real_world_comparison.py -v
+
+See Also
+========
+*_worker.py: Modules under test
 """
 
 import sys

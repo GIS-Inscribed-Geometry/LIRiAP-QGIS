@@ -1,6 +1,5 @@
 """
-Comprehensive test suite for axis_aligned_lir_worker.py
-========================================================
+Comprehensive test suite for axis_aligned_lir_worker.py.
 
 Tests are organised into sections:
 
@@ -17,11 +16,32 @@ Tests are organised into sections:
 
 Strictness contract
 -------------------
-* Every solved rectangle must satisfy  ``poly.covers(rect)``  with NO exceptions.
-* Area must match expected values within  ``AREA_REL_TOL = 1e-4``  (0.01 %).
-* ``best_effort`` must be False for all exact solves on well-formed polygons.
-* No result may have  ``rect is None``  for any valid non-degenerate polygon
-  when  ``always_return=True``.
+* Every solved rectangle must satisfy  poly.covers(rect)  with NO exceptions.
+* Area must match expected values within  AREA_REL_TOL = 1e-4  (0.01 %).
+* best_effort must be False for all exact solves on well-formed polygons.
+* No result may have  rect is None  for any valid non-degenerate polygon
+  when  always_return=True.
+
+Test Classes
+============
+TestPolygonTypeDetection: Section A - polygon type detection
+TestConvexNoHolesSolver: Section B - Alt/Amenta solver
+TestVertexGridSolver: Section C - Daniels et al. solver
+TestFullPipeline: Section D - end-to-end solve
+TestAxisAngleRotation: Section E - rotation handling
+TestMaxRatioConstraint: Section F - aspect ratio limits
+TestHolesHandling: Section G - hole support
+TestWorkerEntryPoint: Section H - _worker_process_feature
+TestEdgeCases: Section I - degenerate polygon handling
+TestContainmentInvariant: Section J - poly.covers(rect) validation
+
+Run
+===
+pytest tests/test_axis_aligned_lir.py -v
+
+See Also
+========
+axis_aligned_lir_worker.py: Module under test
 """
 
 from __future__ import annotations

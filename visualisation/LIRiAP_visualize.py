@@ -1,21 +1,45 @@
 #!/usr/bin/env python3
-"""LIRiAP Visual Preview Tool
+"""
+LIRiAP Visual Preview Tool.
 
 Generates HTML files to visualize polygons and their largest inscribed rectangles.
-Output goes to `output/liriap_output/` directory.
+Output goes to ``output/liriap_output/`` directory.
 
-Run with: python LIRiAP_visualize.py [--algorithm NAME]
+Usage
+=====
+python LIRiAP_visualize.py [--algorithm NAME] [--input PATH] [--output DIR]
 
-Available algorithms (from LIRiAP_pack):
-  axis_aligned      - axis_aligned_lir_worker
-  contained         - contained_standard_worker  
-  contained_fast   - contained_fast_worker
-  bcrs             - bcrs_worker
-  bcrs_fast         - bcrs_fast_worker
-  approximation    - approximation_standard_worker
-  approximation_fast - approximation_fast_worker
+Available Algorithms
+===================
+axis_aligned       - Exact axis-aligned LIR
+contained          - Contained Standard
+contained_fast     - Contained Fast
+bcrs              - BCRS Standard
+bcrs_fast         - BCRS Fast
+approximation     - Approximation Standard
+approximation_fast - Approximation Fast
 
-Run with: python LIRiAP_visualize.py --algorithm bcrs_fast
+Input Formats
+=============
+- GeoJSON files (.geojson, .json)
+- GeoPackage (.gpkg)
+- Shapefile (.shp)
+
+Output
+======
+HTML visualization with:
+- Polygon outline
+- Inscribed rectangle
+- Algorithm metadata
+- Timing information
+
+Required Modules
+================
+numpy, shapely, matplotlib (optional for chart generation)
+
+See Also
+========
+event_emitter.py: TraceEmitter for step-by-step event collection
 """
 
 import argparse

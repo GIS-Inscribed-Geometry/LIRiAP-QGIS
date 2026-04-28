@@ -1,5 +1,24 @@
-import pathlib
-import unittest
+"""
+Test suite for tuning constant guardrails.
+
+Verifies that all worker modules declare required tuning constants
+and that default values are within acceptable ranges.
+
+Test Constants Checked
+======================
+- _EDGE_KERNEL: Edge direction weighting
+- _UPPER_BOUND_FACTOR: Area upper bound multiplier
+- _BRENT_XATOL: Brent optimization tolerance
+- _PRUNE_MARGIN: Containment certification margin
+
+Running
+=======
+pytest tests/test_tuning_constants.py -v
+
+See Also
+========
+*_worker.py: Modules under test
+"""
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
