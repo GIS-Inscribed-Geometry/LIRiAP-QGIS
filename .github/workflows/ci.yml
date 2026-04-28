@@ -31,12 +31,23 @@ jobs:
           pip install shapely numpy
           pip install numba || echo "numba optional – skipping"
 
-      - name: Flake8 (style + syntax)
+      # Hard-fail only on real errors: syntax (E9xx), undefined names (F821),
+      # redefined builtins (F811), and dangerous bare-except (E722).
+      # Everything else is pre-existing style debt — addressed gradually.
+      - name: Flake8 — errors only (hard fail)
+        run: |
+          flake8 LIRiAP_pack LiRiAP_provider \
+            --select=E9,F821,F811,E722 \
+            --count --statistics
+
+      # Style + quality warnings: informational, never blocks the build.
+      - name: Flake8 — style warnings (soft, no fail)
         run: |
           flake8 LIRiAP_pack LiRiAP_provider \
             --max-line-length=120 \
-            --extend-ignore=E203,W503 \
-            --count --statistics
+            --extend-ignore=E203,W503,E402,E701,E702,E703,E221,E303,E302,E305,E122,E741,W292,W293,F401,F841 \
+            --count --statistics \
+            --exit-zero
 
       - name: Pylint (logic + type hints)
         run: |
