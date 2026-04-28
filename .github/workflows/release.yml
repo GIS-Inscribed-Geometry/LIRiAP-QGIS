@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build plugin zip & publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: |
+          TAG=${GITHUB_REF_NAME}
+          VERSION=${TAG#v}
+          echo "tag=$TAG"         >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check metadata.txt version
+        run: |
+          META_VERSION=$(grep '^version' LiRiAP_provider/metadata.txt | cut -d= -f2 | tr -d ' ')
+          TAG_VERSION=${{ steps.version.outputs.version }}
+          if [ "$META_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::metadata.txt version ($META_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "Version OK: $META_VERSION"
+
+      - name: Build plugin zip
+        run: |
+          PLUGIN_DIR="LIRiAP"
+          VERSION=${{ steps.version.outputs.version }}
+          ZIP_NAME="LIRiAP_${VERSION}.zip"
+
+          mkdir -p dist/${PLUGIN_DIR}
+          cp -r LIRiAP_pack       dist/${PLUGIN_DIR}/
+          cp -r LiRiAP_provider/. dist/${PLUGIN_DIR}/
+          cp    README.md         dist/${PLUGIN_DIR}/ 2>/dev/null || true
+          cp    LICENSE           dist/${PLUGIN_DIR}/ 2>/dev/null || true
+
+          find dist/ -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          find dist/ -name '*.pyc' -delete
+          find dist/ -name '*.pyo' -delete
+
+          cd dist
+          zip -r ../${ZIP_NAME} ${PLUGIN_DIR}/
+          cd ..
+
+          echo "Built: ${ZIP_NAME}  ($(du -sh ${ZIP_NAME} | cut -f1))"
+          echo "zip_name=${ZIP_NAME}" >> $GITHUB_ENV
+
+      - name: Generate changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]' | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+            echo "No previous tag – using initial commit."
+          fi
+          echo "## What's changed since ${PREV_TAG}" > CHANGELOG_FRAGMENT.md
+          git log ${PREV_TAG}..HEAD \
+            --pretty=format:'- %s (%h)' \
+            --no-merges >> CHANGELOG_FRAGMENT.md
+          echo "" >> CHANGELOG_FRAGMENT.md
+          cat CHANGELOG_FRAGMENT.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "LIRiAP ${{ steps.version.outputs.version }}"
+          body_path: CHANGELOG_FRAGMENT.md
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+          files: ${{ env.zip_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Job summary
+        run: |
+          echo "### Release ${{ steps.version.outputs.tag }} published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Artifact: \`${{ env.zip_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat CHANGELOG_FRAGMENT.md >> $GITHUB_STEP_SUMMARY
