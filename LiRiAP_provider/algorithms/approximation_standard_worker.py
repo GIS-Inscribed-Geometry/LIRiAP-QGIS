@@ -1,15 +1,49 @@
 """
 LIRiAP Approximation Standard worker module.
 
-Pure geometry routines used by the corresponding algorithm wrapper.
+Pure geometry solver for fast area-focused rectangle search.
 No QGIS or Qt runtime dependencies.
 
-Pipeline:
-1. Edge-guided coarse candidate search.
-2. Coarse candidate evaluation with local angle polishing.
-3. Fine-grid solve near the strongest candidate angle.
-4. Optional containment buffer application.
+Pipeline
+========
+1. Edge-guided coarse candidate search from polygon edge directions
+2. Upper-bound pruning to skip weak candidates early
+3. Coarse grid evaluation at candidate angles
+4. Optional fallback uniform sweep if candidates are weak
+5. Angle refinement via bounded Brent optimization
+6. Fine-grid solve near best angle
+7. Rotate rectangle back to map coordinates
+8. Optional containment buffer application
+
+Algorithm Semantics
+===================
+NOT a strict containment solver. Rectangle can violate containment in
+difficult cases. Use for quick candidate finding and exploratory analysis.
+
+Complexity
+==========
+O(n + (m+s180)*g_coarse^2 + (p+1)*g_fine^2) where:
+- n: polygon vertices
+- m: edge-guided candidates (<=10)
+- s180: fallback sweep (ceil(180/ANGLE_STEP))
+- g_coarse, g_fine: grid resolutions
+- p: Brent iterations
+
+Output
+======
+(feat_id, wkt, area, angle_deg, ratio) or None
+
+Parameters (tuple order)
+========================
+angle_step, grid_coarse, grid_fine, max_ratio, buf_enabled, buf_value
+
+See Also
+========
+approximation_standard_algorithm: QGIS wrapper
+approximation_fast_worker: Optimized variant
 """
+
+import time
 
 import numpy as np
 from scipy.optimize import minimize_scalar
@@ -112,7 +146,7 @@ def _histogram_kernel(heights, xs, ys, row_idx, max_ratio):
 # Receives a serialised feature payload, runs the full search, returns result.
 # ===========================================================================
 
-def _worker_process_feature(args):
+def _worker_process_feature(args, emitter=None):
     """
     Standalone worker function for multiprocessing.Pool.
 
@@ -121,6 +155,8 @@ def _worker_process_feature(args):
     args : tuple
         (feat_id, wkb_bytes, angle_step, grid_steps_coarse, grid_steps_fine,
          max_ratio, buf_enabled, buf_value)
+    emitter : TraceEmitter or None
+        Optional event emitter for visualisation traces.
 
     Returns
     -------
@@ -133,10 +169,27 @@ def _worker_process_feature(args):
     try:
         shapely_poly = wkb_loads(bytes(wkb_bytes))
         result = _search(shapely_poly, angle_step, grid_steps_coarse,
-                         grid_steps_fine, max_ratio, buf_enabled, buf_value)
+                         grid_steps_fine, max_ratio, buf_enabled, buf_value,
+                         emitter=emitter)
         if result is None:
             return None
         rect, area, angle, ratio = result
+
+        if emitter:
+            emitter.emit(
+                phase="RESULT", type_="final_result",
+                label=f"Final: area={area:.1f}",
+                narration="Approximation standard solve complete.",
+                rect=[float(rect.bounds[0]), float(rect.bounds[1]),
+                      float(rect.bounds[2]), float(rect.bounds[3])],
+                area=round(float(area), 4),
+                pct_polygon=round(area / max(shapely_poly.area, 1e-14) * 100, 2),
+                angle_deg=round(float(angle), 4),
+                algorithm="approximation_standard",
+                total_events=len(emitter.events),
+                elapsed_ms=round(time.monotonic() * 1000 - emitter._start_ms, 2),
+            )
+
         return (feat_id, rect.wkt, round(area, 4),
                 round(angle, 2), round(ratio, 4))
     except Exception:
@@ -243,7 +296,7 @@ def _solve_axis_rect(poly, grid_steps, max_ratio):
 
 
 def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
-            max_ratio, buf_enabled, buf_value):
+            max_ratio, buf_enabled, buf_value, emitter=None):
     """
     Full search for one polygon — no QGIS objects, pure geometry.
     Combines:
@@ -264,6 +317,17 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
 
     # ── Stage 1: edge-guided candidates ─────────────────────────────────────
     candidates = _edge_candidate_angles(shapely_poly)
+
+    # ── Emit edge_angles_found ──────────────────────────────────────────────
+    if emitter:
+        emitter.emit(
+            phase="CANDIDATES", type_="edge_angles_found",
+            label=f"{len(candidates)} edge angles",
+            narration="Edge-direction angles extracted from polygon boundary.",
+            angles_deg=candidates.tolist(),
+            edge_lengths=[],
+            smoothed=True,
+        )
 
     if len(candidates) >= 2:
         gaps = np.diff(np.sort(candidates))
@@ -288,7 +352,28 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
         # Early rejection: skip this angle if its theoretical maximum is
         # already beaten by the current best rectangle
         if ub <= best_area:
+            if emitter:
+                emitter.emit(
+                    phase="CANDIDATES", type_="upper_bound_computed",
+                    label=f"Angle {angle:.1f}° pruned (UB={ub:.1f})",
+                    narration="Upper bound below current best; angle pruned.",
+                    angle_deg=float(angle),
+                    upper_bound=round(ub, 4),
+                    pruned=True,
+                    prune_threshold=round(best_area, 4),
+                )
             continue
+
+        if emitter:
+            emitter.emit(
+                phase="CANDIDATES", type_="upper_bound_computed",
+                label=f"Angle {angle:.1f}° UB={ub:.1f}",
+                narration="Upper bound exceeds current best; evaluating angle.",
+                angle_deg=float(angle),
+                upper_bound=round(ub, 4),
+                pruned=False,
+                prune_threshold=round(best_area, 4),
+            )
 
         rot_poly = rotate(shapely_poly, -angle,
                           origin=centroid, use_radians=False)
@@ -324,6 +409,17 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
 
     lo = best_angle - half_window
     hi = best_angle + half_window
+
+    if emitter:
+        emitter.emit(
+            phase="ANGLE_SEARCH", type_="brent_bracket_set",
+            label=f"Brent bracket [{lo:.1f}, {hi:.1f}]",
+            narration=f"Brent bracket set around {best_angle:.1f}°.",
+            center_deg=round(best_angle, 4),
+            bracket_deg=[round(lo, 4), round(hi, 4)],
+            half_width=round(half_window, 4),
+        )
+
     res = minimize_scalar(
         _neg_area_fine,
         bounds=(lo, hi),
@@ -333,6 +429,16 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
 
     if res.fun < -best_area:
         best_angle = res.x
+        if emitter:
+            emitter.emit(
+                phase="ANGLE_SEARCH", type_="angle_polished",
+                label=f"Polished angle {best_angle:.2f}°",
+                narration="Brent optimisation converged on refined angle.",
+                angle_deg=round(best_angle, 4),
+                area=round(-res.fun, 4),
+                rect=[0, 0, 0, 0],
+                iterations_used=int(res.nfev or 0),
+            )
         rot_poly = rotate(shapely_poly, -best_angle,
                           origin=centroid, use_radians=False)
         best_rect, best_area = _solve_axis_rect(
@@ -344,6 +450,22 @@ def _search(shapely_poly, angle_step, grid_steps_coarse, grid_steps_fine,
     # Rotate rectangle back to original CRS orientation
     final_rect = rotate(best_rect, best_angle,
                         origin=centroid, use_radians=False)
+
+    if emitter:
+        rect_bounds = final_rect.bounds
+        emitter.emit(
+            phase="RESULT", type_="best_updated",
+            label=f"Best: area={best_area:.1f}",
+            narration="Best rectangle found by approximation standard solver.",
+            rect=[float(rect_bounds[0]), float(rect_bounds[1]),
+                  float(rect_bounds[2]), float(rect_bounds[3])],
+            area=round(best_area, 4),
+            pct_polygon=round(best_area / max(shapely_poly.area, 1e-14) * 100, 2),
+            angle_deg=round(best_angle, 4),
+            source="APPROXIMATION",
+            prev_area=round(emitter._best_area, 4),
+        )
+        emitter._best_area = best_area
 
     # ── Stage 4: optional containment buffer ─────────────────────────────────
     if buf_enabled and buf_value != 0.0:

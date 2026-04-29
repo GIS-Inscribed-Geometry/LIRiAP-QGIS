@@ -1,9 +1,68 @@
 """
-LIRiAP BCRS algorithm wrapper.
+LIRiAP BCRS (Boundary-Coordinate Raster Solve) algorithm wrapper.
 
-This file keeps the geometric logic in `bcrs_worker.py` and provides a
-consistent QGIS-facing interface for workers, chunking, and optional Numba
-bootstrap.
+Implements a QGIS Processing algorithm for the full contained-plus-expansion
+solve, combining containment certification with CABF boundary expansion.
+
+Algorithm Overview
+==================
+Wraps the geometric solver in ``bcrs_worker.py`` with:
+- QGIS parameter handling
+- Parallel execution (serial, chunked, per-feature)
+- Optional Numba JIT bootstrap
+- Containment certification with best-effort fallback
+- CABF boundary expansion
+
+This is the only algorithm family that combines containment certification
+with explicit boundary expansion (CABF).
+
+Execution Modes
+===============
+- Serial (N_WORKERS=1): Single-threaded (recommended for BCRS)
+- Parallel (N_WORKERS>1): Per-feature parallel
+- Chunked (N_WORKERS>1 + USE_CHUNKING=True): Chunk-based parallel
+
+Output Fields
+=============
+- feat_id: Source feature ID
+- area: Rectangle area in CRS map units
+- angle_deg: Rotation angle in degrees
+- ratio: Aspect ratio (long:short)
+- cand_rank: Candidate rank (0=best)
+- s2_gain: Stage 2 area gain
+- s4_gain: Stage 4 (BCRS) area gain
+- s5_gain: Stage 5 (CABF) area gain
+- best_effort: 1 if fallback used, 0 otherwise
+
+Parameters
+==========
+GRID_COARSE    : Initial grid resolution
+GRID_FINE      : Refinement grid resolution
+ANGLE_STEP     : Fallback sweep step (degrees)
+TOP_K          : Candidates to refine
+MAX_RATIO      : Aspect ratio constraint (0=unlimited)
+ALWAYS_RETURN  : Enable best-effort fallback
+USE_BUFFER     : Apply containment buffer
+BUFFER_VALUE   : Buffer distance
+N_WORKERS      : Parallel workers (0=auto, 1=serial)
+USE_CHUNKING   : Chunked parallel mode
+AUTO_INSTALL_NUMBA: Auto-install Numba JIT
+
+Novel Contributions
+===================
+- BCRS: Boundary-coordinate raster solve using polygon vertices as grid lines
+- CABF: Coordinate-Ascent Boundary Fitting for boundary expansion
+- Variable-pitch LRH: Histogram solver adapting to boundary coordinate distribution
+
+References
+==========
+Daniels et al. (1997): Finding the largest axis-aligned rectangle in a polygon
+Bentley (1977): Programming Pearls - Fast Algorithms for Polygon Containment
+
+See Also
+========
+bcrs_worker: Geometric solver
+bcrs_fast_algorithm: Optimized variant
 """
 
 import concurrent.futures as _cf

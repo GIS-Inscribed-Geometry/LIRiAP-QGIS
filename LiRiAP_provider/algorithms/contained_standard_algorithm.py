@@ -1,9 +1,56 @@
 """
 LIRiAP Contained Standard algorithm wrapper.
 
-This file keeps the geometric logic in `contained_standard_worker.py` and
-provides a consistent QGIS-facing interface for workers, chunking, and optional
-Numba bootstrap.
+Implements a QGIS Processing algorithm for certified contained rectangle search
+with strict containment guarantees (unless fallback is enabled).
+
+Algorithm Overview
+==================
+Wraps the geometric solver in ``contained_standard_worker.py`` with:
+- QGIS parameter handling
+- Parallel execution (serial, chunked, per-feature)
+- Optional Numba JIT bootstrap
+- Containment certification with best-effort fallback
+
+Execution Modes
+===============
+- Serial (N_WORKERS=1): Single-threaded execution
+- Parallel (N_WORKERS>1): Per-feature parallel
+- Chunked (N_WORKERS>1 + USE_CHUNKING=True): Chunk-based parallel
+
+Output Fields
+=============
+- feat_id: Source feature ID
+- area: Rectangle area in CRS map units
+- angle_deg: Rotation angle in degrees
+- ratio: Aspect ratio (long:short)
+- cand_rank: Candidate rank (0=best)
+- s2_gain: Stage 2 area gain
+- best_effort: 1 if fallback used, 0 otherwise
+
+Parameters
+==========
+GRID_COARSE    : Initial grid resolution
+GRID_FINE      : Refinement grid resolution
+ANGLE_STEP     : Fallback sweep step (degrees)
+TOP_K          : Candidates to refine
+MAX_RATIO      : Aspect ratio constraint (0=unlimited)
+ALWAYS_RETURN  : Enable best-effort fallback
+USE_BUFFER     : Apply containment buffer
+BUFFER_VALUE   : Buffer distance
+N_WORKERS      : Parallel workers (0=auto, 1=serial)
+USE_CHUNKING   : Chunked parallel mode
+AUTO_INSTALL_NUMBA: Auto-install Numba JIT
+
+Semantics
+=========
+- ALWAYS_RETURN=False: Strict certification only (may return no rectangle)
+- ALWAYS_RETURN=True: Best-effort fallback if certification fails
+
+See Also
+========
+contained_standard_worker: Geometric solver
+contained_fast_algorithm: Optimized variant
 """
 
 import concurrent.futures as _cf

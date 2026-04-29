@@ -1,18 +1,43 @@
 """
 LIRiAP Contained Fast worker module.
 
-Pure geometry routines used by the corresponding algorithm wrapper.
-No QGIS or Qt runtime dependencies.
+Pure geometry solver for certified contained rectangle search with optimized
+execution. No QGIS or Qt runtime dependencies.
 
-Pipeline:
-1. Edge-guided angle candidates with coarse-grid ranking.
-2. Local angle polishing around top candidates.
-3. Fine-grid solve at polished and original angles.
-4. Containment certification with symmetric-shrink fallback.
+Pipeline
+========
+Same as Contained Standard:
+1. Stage 1: Edge-guided angle candidates with coarse-grid ranking
+2. Stage 2: Local angle polishing around each candidate
+3. Stage 3: Fine-grid solve at polished and original angles
+4. Stage 4: Containment certification with symmetric-shrink fallback
+
+Optimization Difference
+======================
+Reduces expensive Stage 3 calls by using coarse grid during refinement
+instead of fine grid. Achieves significant speedup with minimal accuracy loss.
+
+Algorithm Semantics
+==================
+Same as Contained Standard: strict containment or best-effort fallback.
+
+Output
+======
+(feat_id, wkt, area, angle_deg, ratio, cand_rank, s2_gain, best_effort) or None
+
+Parameters (tuple order)
+=======================
+angle_step, grid_coarse, grid_fine, max_ratio, buf_enabled, buf_value, top_k, always_return
+
+See Also
+========
+contained_fast_algorithm: QGIS wrapper
+contained_standard_worker: Non-optimized variant
 """
 from __future__ import annotations
 
 import math
+import time
 
 import numpy as np
 from scipy.optimize import minimize_scalar
@@ -298,7 +323,8 @@ def _heuristic_candidates(poly: Polygon,
                           grid_coarse: int,
                           grid_fine: int,
                           max_ratio: float,
-                          top_k: int) -> list:
+                          top_k: int,
+                          emitter=None) -> list:
     centroid = poly.centroid
     cx, cy = centroid.x, centroid.y
     hull = poly.convex_hull  # used for upper-bound queries
@@ -311,12 +337,44 @@ def _heuristic_candidates(poly: Polygon,
         rot_s = shp_rotate(simplified, -angle_f, origin=centroid, use_radians=False)
         return _solve_axis_rect_grid(rot_s, grid_coarse, max_ratio)
 
+    # ── Emit edge_angles_found ──────────────────────────────────────────────
+    edge_angles = _edge_candidate_angles(poly)
+    if emitter:
+        emitter.emit(
+            phase="CANDIDATES", type_="edge_angles_found",
+            label=f"{len(edge_angles)} edge angles",
+            narration="Edge-direction angles extracted from polygon boundary.",
+            angles_deg=edge_angles.tolist(),
+            edge_lengths=[],
+            smoothed=True,
+        )
+
     # Pass 1: dominant edge orientations
-    for angle in _edge_candidate_angles(poly):
+    for angle in edge_angles:
         a = float(angle)
         ub = _upper_bound_area(hull, a, max_ratio, centroid)
         if ub <= best_area * _PRUNE_MARGIN:
+            if emitter:
+                emitter.emit(
+                    phase="CANDIDATES", type_="upper_bound_computed",
+                    label=f"Angle {a:.1f}° pruned",
+                    narration="Upper bound below threshold; angle pruned.",
+                    angle_deg=a,
+                    upper_bound=round(ub, 4),
+                    pruned=True,
+                    prune_threshold=round(best_area * _PRUNE_MARGIN, 4),
+                )
             continue
+        if emitter:
+            emitter.emit(
+                phase="CANDIDATES", type_="upper_bound_computed",
+                label=f"Angle {a:.1f}° UB={ub:.1f}",
+                narration="Evaluating candidate angle.",
+                angle_deg=a,
+                upper_bound=round(ub, 4),
+                pruned=False,
+                prune_threshold=round(best_area * _PRUNE_MARGIN, 4),
+            )
         rect, area = _solve_coarse(a)
         if area > 0:
             raw.append((area, a, rect))
@@ -348,6 +406,19 @@ def _heuristic_candidates(poly: Polygon,
             continue
         seen.append(angle)
         rect_world = shp_rotate(rect_rot, angle, origin=centroid, use_radians=False)
+        if emitter:
+            rect_bounds = rect_world.bounds
+            emitter.emit(
+                phase="CANDIDATES", type_="candidate_found",
+                label=f"Cand {len(kept)}: {angle:.1f}° area={area:.1f}",
+                narration=f"Candidate at {angle:.1f}°.",
+                angle_deg=round(angle, 4),
+                rect=[float(rect_bounds[0]), float(rect_bounds[1]),
+                      float(rect_bounds[2]), float(rect_bounds[3])],
+                area=round(float(area), 4),
+                source="grid",
+                rank=len(kept),
+            )
         kept.append({
             'angle': angle,
             'area': area,
@@ -663,7 +734,8 @@ def _refine_best_candidate(poly: Polygon,
                            buf_enabled: bool,
                            buf_value: float,
                            always_return: bool,
-                           prepared_poly=None):
+                           prepared_poly=None,
+                           emitter=None):
     """Full Stage 2 pipeline.  Returns 7-tuple or None."""
     certified = []
     fallback_best = None
@@ -675,6 +747,17 @@ def _refine_best_candidate(poly: Polygon,
         # Stage 2: Brent angle polish (coarse grid only)
         cand_a = _polish_angle(poly, cand, grid_coarse, max_ratio)
         angle_work = cand_a['angle']
+
+        if emitter and cand_a['angle'] != cand['angle']:
+            emitter.emit(
+                phase="ANGLE_SEARCH", type_="angle_polished",
+                label=f"Polished {angle_work:.2f}°",
+                narration="Brent optimisation refined the angle.",
+                angle_deg=round(angle_work, 4),
+                area=round(cand_a['area'], 4),
+                rect=[0, 0, 0, 0],
+                iterations_used=0,
+            )
 
         # Stage 3: definitive fine-grid solve at polished angle
         rot_work = shp_rotate(poly, -angle_work,
@@ -698,17 +781,76 @@ def _refine_best_candidate(poly: Polygon,
             }
 
         # Stage 4: containment certification
+        if emitter:
+            emitter.emit(
+                phase="CERT", type_="cert_started",
+                label="Certification",
+                narration="Verifying rectangle containment.",
+                rect=[float(best_raw_r.bounds[0]), float(best_raw_r.bounds[1]),
+                      float(best_raw_r.bounds[2]), float(best_raw_r.bounds[3])],
+                area=round(best_raw_a, 4),
+                method="covers",
+            )
+
         best_r, best_a = _certify_and_adjust(
             poly, best_raw_r, max_ratio, False, 0.0, prepared_poly)
         used_best_effort = False
 
-        if best_r is None and always_return:
+        if best_r is not None:
+            if emitter:
+                emitter.emit(
+                    phase="CERT", type_="cert_passed",
+                    label="Cert passed",
+                    narration="Rectangle fully inside polygon.",
+                    rect=[float(best_r.bounds[0]), float(best_r.bounds[1]),
+                          float(best_r.bounds[2]), float(best_r.bounds[3])],
+                    area=round(best_a, 4),
+                    inset=round(best_raw_a - best_a, 6),
+                )
+        elif always_return:
+            if emitter:
+                emitter.emit(
+                    phase="CERT", type_="cert_failed_shrink",
+                    label="Cert failed, shrinking",
+                    narration="Shrinking rectangle for containment.",
+                    attempt=1,
+                    rect_before=[float(best_raw_r.bounds[0]),
+                                 float(best_raw_r.bounds[1]),
+                                 float(best_raw_r.bounds[2]),
+                                 float(best_raw_r.bounds[3])],
+                    rect_after=[0, 0, 0, 0],
+                    eps=1e-7,
+                )
+                emitter.emit(
+                    phase="CERT", type_="cert_fallback",
+                    label="Fallback invoked",
+                    narration="Best-effort shrink fallback.",
+                    reason="shrink_exhausted",
+                    fallback="best_effort_shrink",
+                )
             best_r, best_a = _best_effort_shrink_to_cover(
                 poly, best_raw_r, max_ratio, prepared_poly=prepared_poly)
             used_best_effort = best_r is not None
 
         if best_r is None:
             continue
+
+        if emitter:
+            poly_area = float(poly.area)
+            pct = (best_a / poly_area * 100) if poly_area > 0 else 0.0
+            emitter.emit(
+                phase="RESULT", type_="best_updated",
+                label=f"Best: area={best_a:.1f} ({pct:.1f}%)",
+                narration="New best rectangle.",
+                rect=[float(best_r.bounds[0]), float(best_r.bounds[1]),
+                      float(best_r.bounds[2]), float(best_r.bounds[3])],
+                area=round(best_a, 4),
+                pct_polygon=round(pct, 2),
+                angle_deg=round(best_raw_ang, 4),
+                source="CERT",
+                prev_area=round(emitter._best_area, 4),
+            )
+            emitter._best_area = best_a
 
         if buf_enabled and buf_value != 0.0:
             cand_buf = best_r.buffer(buf_value, cap_style=3, join_style=2)
@@ -800,7 +942,7 @@ def _prepare_polygon(geom):
 # ==========================================================================
 # ⑧ MODULE-LEVEL MULTIPROCESSING ENTRY POINT
 # ==========================================================================
-def _worker_process_feature(args):
+def _worker_process_feature(args, emitter=None):
     """
     Stateless worker — safe for ThreadPoolExecutor and ProcessPoolExecutor.
 
@@ -809,6 +951,8 @@ def _worker_process_feature(args):
     args : tuple
         (feat_id, wkb_bytes, angle_step, grid_coarse, grid_fine,
          max_ratio, buf_enabled, buf_value, top_k, always_return)
+    emitter : TraceEmitter or None
+        Optional event emitter for visualisation traces.
 
     Returns
     -------
@@ -824,8 +968,6 @@ def _worker_process_feature(args):
         if poly is None:
             return None
 
-        # Precision normalisation (Shapely ≥ 2.x) — snaps near-coincident
-        # vertices to a sub-nanometre grid, preventing degenerate GEOS results.
         try:
             from shapely import set_precision
             minx, miny, maxx, maxy = poly.bounds
@@ -840,22 +982,59 @@ def _worker_process_feature(args):
         if poly is None or poly.is_empty:
             return None
 
+        if emitter:
+            ext_coords = [[float(x), float(y)] for x, y in poly.exterior.coords[:-1]]
+            hole_coords = [[[float(x), float(y)] for x, y in r.coords[:-1]] for r in poly.interiors]
+            emitter.emit(
+                phase="SETUP", type_="polygon_loaded",
+                label="Polygon loaded",
+                narration="Polygon loaded for contained fast solver.",
+                exterior=ext_coords,
+                holes=hole_coords,
+                bbox=[float(poly.bounds[0]), float(poly.bounds[1]),
+                      float(poly.bounds[2]), float(poly.bounds[3])],
+                area=float(poly.area),
+                vertex_count=len(poly.exterior.coords) - 1,
+                poly_type="concave_no_holes",
+                is_valid=poly.is_valid,
+            )
+
         prepared_poly = _make_prepared(poly)
 
         candidates = _heuristic_candidates(
-            poly, angle_step, grid_coarse, grid_fine, max_ratio, top_k)
+            poly, angle_step, grid_coarse, grid_fine, max_ratio, top_k,
+            emitter=emitter)
         if not candidates:
             return None
 
         result = _refine_best_candidate(
             poly, candidates, grid_coarse, grid_fine,
             max_ratio, buf_enabled, buf_value, always_return,
-            prepared_poly=prepared_poly)
+            prepared_poly=prepared_poly, emitter=emitter)
 
         if result is None:
             return None
 
         rect, area, angle, ratio, rank, gain, used_best_effort = result
+
+        if emitter:
+            rect_bounds = rect.bounds
+            poly_area = float(poly.area)
+            pct = (area / poly_area * 100) if poly_area > 0 else 0.0
+            emitter.emit(
+                phase="RESULT", type_="final_result",
+                label=f"Final: area={area:.1f} ({pct:.1f}%)",
+                narration="Contained fast LIR solve complete.",
+                rect=[float(rect_bounds[0]), float(rect_bounds[1]),
+                      float(rect_bounds[2]), float(rect_bounds[3])],
+                area=round(float(area), 4),
+                pct_polygon=round(pct, 2),
+                angle_deg=round(float(angle), 4),
+                algorithm="contained_fast",
+                total_events=len(emitter.events),
+                elapsed_ms=round(time.monotonic() * 1000 - emitter._start_ms, 2),
+            )
+
         return (
             feat_id,
             rect.wkt,

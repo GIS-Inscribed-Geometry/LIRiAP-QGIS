@@ -5,11 +5,12 @@ Shared user-facing descriptions for LIRiAP processing algorithms.
 _BASELINE = (
     "<div style='font-family:Segoe UI, Arial, sans-serif; font-size:10pt; line-height:1.35;'>"
     "<p><b>Problem framing</b><br/>"
-    "LIRiAP exposes three solver families with different guarantees:</p>"
+    "LIRiAP exposes four solver families with different guarantees:</p>"
     "<ul>"
     "<li><b>Approximation</b>: fast area-focused search, not strict containment-certified.</li>"
     "<li><b>Contained</b>: strict containment certification (optional best-effort fallback), no expansion stage.</li>"
     "<li><b>BCRS</b>: containment certification plus CABF boundary expansion; full target method in this plugin.</li>"
+    "<li><b>Axis-Aligned</b>: exact fixed-axis solution at vertex-coordinate precision.</li>"
     "</ul>"
     "<p>Concave polygons and polygons with holes are supported.</p>"
 )
@@ -93,26 +94,60 @@ _ALGORITHM_DETAILS = {
         "<li><code>USE_BUFFER/BUFFER_VALUE</code> add containment margin after solve.</li>"
         "</ul>"
     ),
-    "bcrs_fast": (
+"bcrs_fast": (
         "<p><b>Algorithm steps</b></p>"
         "<ol>"
-        "<li>Build top-K candidates from edge-guided coarse search.</li>"
-        "<li>Polish angle around each candidate and prioritize the strongest trials.</li>"
-        "<li>Run BCRS (boundary-coordinate raster solve) in rotated space.</li>"
-        "<li>Apply clamped CABF boundary expansion, then containment certification.</li>"
-        "<li>Use best-effort fallback only when strict certification cannot pass and fallback is enabled.</li>"
+        "<li>Angle scan with upper-bound pruning to find promising candidates.</li>"
+        "<li>Evaluate on coarse/fine vertex grid (Daniels et al. 1997).</li>"
+        "<li>Binary-search boundary push for exact placement.</li>"
+        "<li>Containment certification with CABF expansion.</li>"
+        "<li>Rotate back to map coordinates.</li>"
         "</ol>"
-        "<p><b>Guarantee and setting semantics</b></p>"
+        "<p><b>Guarantee</b></p>"
         "<ul>"
-        "<li>Same geometry semantics as BCRS Standard (includes CABF expansion).</li>"
-        "<li>Worker/chunking settings affect runtime only.</li>"
-        "<li><code>ALWAYS_RETURN</code> controls strict-only vs best-effort fallback behavior.</li>"
+        "<li>Full containment certification + boundary expansion.</li>"
+        "<li><code>TOP_K</code> and <code>ANGLE_STEP</code> tune quality.</li>"
+        "</ul>"
+    ),
+    "axis_aligned": (
+        "<p><b>Algorithm steps</b></p>"
+        "<ol>"
+        "<li>Classify polygon type (convex/concave, with/without holes).</li>"
+        "<li>For convex: Alt/Amenta O(n2) vertex-pair enumeration.</li>"
+        "<li>For concave: Daniels et al. vertex-coordinate grid solver.</li>"
+        "<li>Binary-search boundary refinement for diagonal edges.</li>"
+        "<li>Epsilon-inset containment certification.</li>"
+        "</ol>"
+        "<p><b>Guarantee</b></p>"
+        "<ul>"
+        "<li>Exact solution for convex polygons.</li>"
+        "<li>Vertex-grid optimal for concave.</li>"
+        "<li>Strict containment with epsilon inset.</li>"
+        "<li><code>GRID_FINE</code> for fallback grid resolution.</li>"
+        "<li><code>ALWAYS_RETURN</code> enables best-effort fallback.</li>"
         "</ul>"
     ),
 }
 
 
 def build_short_help(algorithm_title, algorithm_key, numba_available):
+    """
+    Build HTML help string for an algorithm.
+
+    Parameters
+    ----------
+    algorithm_title : str
+        Human-readable title for the algorithm.
+    algorithm_key : str
+        Key matching entries in _ALGORITHM_DETAILS.
+    numba_available : bool
+        Whether Numba JIT is available.
+
+    Returns
+    -------
+    str
+        HTML-formatted help string.
+    """
     details = _ALGORITHM_DETAILS[algorithm_key]
     return (
         f"{_BASELINE}"

@@ -1,9 +1,44 @@
 """
 LIRiAP Approximation Standard algorithm wrapper.
 
-This file keeps the geometric logic in `approximation_standard_worker.py` and
-provides a consistent QGIS-facing interface for workers, chunking, and optional
-Numba bootstrap.
+Implements a QGIS Processing algorithm for fast area-focused rectangle search
+without strict containment certification.
+
+Algorithm Overview
+==================
+Wraps the geometric solver in ``approximation_standard_worker.py`` with:
+- QGIS parameter handling
+- Parallel execution (serial, chunked, per-feature)
+- Optional Numba JIT bootstrap
+
+Execution Modes
+===============
+- Serial (N_WORKERS=1): Single-threaded execution
+- Parallel (N_WORKERS>1): Per-feature parallel
+- Chunked (N_WORKERS>1 + USE_CHUNKING=True): Chunk-based parallel
+
+Output Fields
+=============
+- feat_id: Source feature ID
+- area: Rectangle area in CRS map units
+- angle_deg: Rotation angle in degrees
+- ratio: Aspect ratio (long:short)
+
+Parameters
+==========
+ANGLE_STEP      : Fallback sweep step (degrees)
+GRID_COARSE    : Initial grid resolution
+GRID_FINE      : Refinement grid resolution
+MAX_RATIO      : Aspect ratio constraint (0=unlimited)
+REFINE_BUFFER  : Enable containment buffer
+N_WORKERS      : Parallel workers (0=auto, 1=serial)
+USE_CHUNKING   : Chunked parallel mode
+AUTO_INSTALL_NUMBA: Auto-install Numba JIT
+
+See Also
+========
+approximation_standard_worker: Geometric solver
+approximation_fast_algorithm: Optimized variant
 """
 
 import concurrent.futures as _cf

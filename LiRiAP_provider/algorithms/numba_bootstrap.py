@@ -1,4 +1,29 @@
-"""Shared helper for optional runtime Numba installation in LIRiAP wrappers."""
+"""
+Shared helper for optional runtime Numba installation in LIRiAP wrappers.
+
+Provides safe auto-installation of the Numba JIT compiler when requested
+via algorithm parameters. Only attempts installation in safe contexts:
+- Isolated Python environments (venv, conda)
+- Writable user-site directories
+
+Functions
+=========
+ensure_numba(feedback, attempt_install) -> (available, installed_now)
+  Checks for existing Numba and optionally installs if missing.
+
+_in_isolated_python_env() -> bool
+  Detects venv/conda environments.
+
+_user_site_writable() -> bool
+  Checks if user-site directory is writable.
+
+_safe_auto_install_context() -> bool
+  Returns True if auto-install is safe.
+
+See Also
+========
+*_algorithm.py: Algorithm wrappers that use ensure_numba
+"""
 
 import importlib.util
 import os
@@ -44,7 +69,19 @@ def _safe_auto_install_context():
 
 def ensure_numba(feedback, attempt_install):
     """
-    Returns (available, installed_now).
+    Check for Numba availability and optionally install it.
+
+    Parameters
+    ----------
+    feedback : QgisFeedback
+        QGIS feedback object for user messages.
+    attempt_install : bool
+        If True, attempt to install Numba if not available.
+
+    Returns
+    -------
+    tuple
+        (available: bool, installed_now: bool)
     """
     # Fast path: Numba is already available in the active Python environment.
     if importlib.util.find_spec("numba") is not None:
