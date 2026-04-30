@@ -63,6 +63,7 @@ from LIRiAP_pack.bcrs_worker import _worker_process_feature as bcrs_worker
 from LIRiAP_pack.bcrs_fast_worker import _worker_process_feature as bcrs_fast_worker
 from LIRiAP_pack.approximation_standard_worker import _worker_process_feature as approx_worker
 from LIRiAP_pack.approximation_fast_worker import _worker_process_feature as approx_fast_worker
+from LIRiAP_pack.skeleton_worker import _worker_process_feature as skeleton_worker
 
 
 def parse_polygon(geom: dict) -> ShapelyPolygon:
@@ -227,6 +228,8 @@ def solve_with_algorithm(poly: ShapelyPolygon, algorithm: str, max_ratio: float 
             result = bcrs_worker((fid, wkb, 5, 40, 120, max_ratio, False, 0.0, 3, False))
         elif algorithm == "bcrs_fast":
             result = bcrs_fast_worker((fid, wkb, 5, 40, 120, max_ratio, False, 0.0, 3, False))
+        elif algorithm == "skeleton":
+            result = skeleton_worker((fid, wkb, 5, 40, 120, max_ratio, False, 0.0, 3, False))
         elif algorithm == "approximation":
             result = approx_worker((fid, wkb, 5, 40, 100, max_ratio, False, 0.0))
         elif algorithm == "approximation_fast":
@@ -241,7 +244,7 @@ def solve_with_algorithm(poly: ShapelyPolygon, algorithm: str, max_ratio: float 
         if algorithm == "axis_aligned":
             _, wkt, area, angle, poly_type, ratio, best_effort = result
             return (_shp_wkt_loads(wkt), area, angle, poly_type, ratio, best_effort)
-        elif algorithm in ("bcrs", "bcrs_fast"):
+        elif algorithm in ("bcrs", "bcrs_fast", "skeleton"):
             _, wkt, area, angle, ratio, cand_rank, stage2_gain, best_effort = result
             return (_shp_wkt_loads(wkt), area, angle, f"rank={cand_rank}", ratio, best_effort)
         elif algorithm in ("contained", "contained_fast"):
@@ -284,11 +287,12 @@ def generate_preview_html(output_dir: Path, algorithm: str = "axis_aligned", max
         "contained_fast": "Contained Fast", 
         "bcrs": "BCRS",
         "bcrs_fast": "BCRS Fast",
+        "skeleton": "Skeleton",
         "approximation": "Approximation",
         "approximation_fast": "Approximation Fast",
     }
 
-    choices = ["axis_aligned", "contained", "contained_fast", "bcrs", "bcrs_fast", "approximation", "approximation_fast"]
+    choices = ["axis_aligned", "contained", "contained_fast", "bcrs", "bcrs_fast", "skeleton", "approximation", "approximation_fast"]
 
     html = f'''<!DOCTYPE html>
 <html>
@@ -381,7 +385,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LIRiAP Visual Preview Tool")
     parser.add_argument(
         "--algorithm", "-a",
-        choices=["axis_aligned", "contained", "contained_fast", "bcrs", "bcrs_fast", "approximation", "approximation_fast"],
+        choices=["axis_aligned", "contained", "contained_fast", "bcrs", "bcrs_fast", "skeleton", "approximation", "approximation_fast"],
         default="axis_aligned",
         help="Algorithm to use (default: axis_aligned)",
     )

@@ -11,12 +11,12 @@ Stage 1: Geometry preparation
 Stage 2: Heuristic candidates
 Stage 3: Angle refinement with trial ranking
 Stage 4: BCRS boundary-coordinate solve (limited to top candidates)
-Stage 5: CABF expansion
+Stage 5: SDF-guided boundary expansion
 Stage 6: Containment certification
 Stage 7: Selection and output
 
 Optimization Differences
-========================
+=======================
 - Trial ranking: Ranks Stage 3 angles by likelihood before expensive Stage 4-5
 - Limited runs: Only top candidates proceed to boundary-coordinate solve
 - Area cache: Reuses computed values to reduce repeated work
@@ -34,6 +34,7 @@ See Also
 ========
 bcrs_fast_algorithm: QGIS wrapper
 bcrs_worker: Non-optimized variant
+sdf_oracle: SDF-based signed-distance field oracle
 """
 
 from __future__ import annotations
@@ -83,6 +84,32 @@ except ImportError:
 
 
     _NUMBA_AVAILABLE = False
+
+# --------------------------------------------------------------------------
+# SDF oracle — signed-distance-field primitive (inlined from sdf_oracle.py)
+# --------------------------------------------------------------------------
+def _polygon_sdf(poly, x, y):
+    """Signed distance: negative inside, positive outside/in-hole."""
+    from shapely.geometry import Point
+    pt = Point(x, y)
+    d_poly = poly.distance(pt)
+    if d_poly > 0.0:
+        return d_poly
+    d_ext = poly.exterior.distance(pt)
+    if poly.contains(pt):
+        min_d = d_ext
+        for ring in poly.interiors:
+            d_h = ring.distance(pt)
+            if d_h < min_d:
+                min_d = d_h
+        return -min_d
+    if d_ext < 1e-12:
+        return 0.0
+    for ring in poly.interiors:
+        hp = Polygon(ring)
+        if hp.contains(pt):
+            return hp.exterior.distance(pt)
+    return 0.0
 
 # --------------------------------------------------------------------------
 # Tuning constants
@@ -344,16 +371,16 @@ def _solve_axis_rect_bcrs(rot_poly, seed_bounds, max_ratio):
 
 
 # ==========================================================================
-# ④ CLAMPED CABF
+# ④ SDF-GUIDED BOUNDARY EXPANSION
 # ==========================================================================
 def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio, emitter=None):
     """
-    Coordinate-Ascent Boundary Fitting with vertex clamping.
+    SDF-guided coordinate-ascent boundary expansion.
 
-    After each binary-search expansion, the expanded side is clamped to
-    the nearest polygon boundary vertex coordinate in that direction.
-    This prevents GEOS fp tolerance from accepting a side at e.g.
-    y = 2.000000001 when the hole boundary is at exactly y = 2.0.
+    Uses the signed-distance field at each side's midpoint to compute a
+    tight upper bound on the expansion distance, then binary-searches to
+    the exact boundary using ``prep.covers``.  The SDF bounds are tighter
+    than CABF's raw bounding-box extent, requiring fewer binary steps.
     """
     minx, miny, maxx, maxy = rot_poly.bounds
     prep = shp_prep(rot_poly)
@@ -362,32 +389,6 @@ def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio, emitter=None):
         if ax1 - ax0 < 1e-12 or ay1 - ay0 < 1e-12:
             return False
         return prep.covers(box(ax0, ay0, ax1, ay1))
-
-    # Build sorted vertex-coordinate arrays for hard-stop clamping
-    _xs = np.asarray(sorted(set(
-        [minx, maxx]
-        + [c[0] for c in rot_poly.exterior.coords[:-1]]
-        + [c[0] for interior in rot_poly.interiors
-           for c in interior.coords[:-1]]
-    )), dtype=np.float64)
-    _ys = np.asarray(sorted(set(
-        [miny, maxy]
-        + [c[1] for c in rot_poly.exterior.coords[:-1]]
-        + [c[1] for interior in rot_poly.interiors
-           for c in interior.coords[:-1]]
-    )), dtype=np.float64)
-
-    def _next_x(v):
-        idx = np.searchsorted(_xs, v - 1e-9, side='left')
-        if idx >= _xs.size:
-            return maxx
-        return float(_xs[idx])
-
-    def _next_y(v):
-        idx = np.searchsorted(_ys, v - 1e-9, side='left')
-        if idx >= _ys.size:
-            return maxy
-        return float(_ys[idx])
 
     # Shrink to valid start (diagonal edges / slightly-invalid seeds)
     if not _v(x0, y0, x1, y1):
@@ -410,98 +411,64 @@ def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio, emitter=None):
         x1 = cx_c + hw * lo;
         y1 = cy_c + hh * lo
 
+    SDF_BINARY_STEPS = 10
+
     for _ in range(_CABF_ITERS):
         # Left
-        lo_d, hi_d = 0.0, x0 - minx
-        for _ in range(_CABF_STEPS):
-            mid = 0.5 * (lo_d + hi_d)
-            if _v(x0 - mid, y0, x1, y1):
-                lo_d = mid
-            else:
-                hi_d = mid
-        old_x0 = x0
-        x0 -= lo_d
-        if emitter and abs(x0 - old_x0) > 1e-12:
-            emitter.emit(
-                phase="BCRS_SOLVE", type_="bcrs_boundary_expand",
-                label=f"Left: {old_x0:.2f} -> {x0:.2f}",
-                narration="Left side expanded.",
-                side="left",
-                from_coord=round(old_x0, 4),
-                to_coord=round(x0, 4),
-                rect_after=[round(x0, 4), round(y0, 4),
-                            round(x1, 4), round(y1, 4)],
-                area_after=round((x1 - x0) * (y1 - y0), 4),
-            )
+        if x0 > minx:
+            sdf = _polygon_sdf(rot_poly, x0, 0.5 * (y0 + y1))
+            hi_d = min(x0 - minx, abs(sdf)) if sdf < 0 else x0 - minx
+            if hi_d > 1e-12:
+                lo_d = 0.0
+                for _ in range(SDF_BINARY_STEPS):
+                    mid = 0.5 * (lo_d + hi_d)
+                    if _v(x0 - mid, y0, x1, y1):
+                        lo_d = mid
+                    else:
+                        hi_d = mid
+                x0 -= lo_d
 
-        # Right (clamped)
-        lo_d, hi_d = 0.0, maxx - x1
-        for _ in range(_CABF_STEPS):
-            mid = 0.5 * (lo_d + hi_d)
-            if _v(x0, y0, x1 + mid, y1):
-                lo_d = mid
-            else:
-                hi_d = mid
-        old_x1 = x1
-        x1 = min(x1 + lo_d, _next_x(x1 + lo_d))
-        if emitter and abs(x1 - old_x1) > 1e-12:
-            emitter.emit(
-                phase="BCRS_SOLVE", type_="bcrs_boundary_expand",
-                label=f"Right: {old_x1:.2f} -> {x1:.2f}",
-                narration="Right side expanded.",
-                side="right",
-                from_coord=round(old_x1, 4),
-                to_coord=round(x1, 4),
-                rect_after=[round(x0, 4), round(y0, 4),
-                            round(x1, 4), round(y1, 4)],
-                area_after=round((x1 - x0) * (y1 - y0), 4),
-            )
+        # Right
+        if x1 < maxx:
+            sdf = _polygon_sdf(rot_poly, x1, 0.5 * (y0 + y1))
+            hi_d = min(maxx - x1, abs(sdf)) if sdf < 0 else maxx - x1
+            if hi_d > 1e-12:
+                lo_d = 0.0
+                for _ in range(SDF_BINARY_STEPS):
+                    mid = 0.5 * (lo_d + hi_d)
+                    if _v(x0, y0, x1 + mid, y1):
+                        lo_d = mid
+                    else:
+                        hi_d = mid
+                x1 += lo_d
 
         # Bottom
-        lo_d, hi_d = 0.0, y0 - miny
-        for _ in range(_CABF_STEPS):
-            mid = 0.5 * (lo_d + hi_d)
-            if _v(x0, y0 - mid, x1, y1):
-                lo_d = mid
-            else:
-                hi_d = mid
-        old_y0 = y0
-        y0 -= lo_d
-        if emitter and abs(y0 - old_y0) > 1e-12:
-            emitter.emit(
-                phase="BCRS_SOLVE", type_="bcrs_boundary_expand",
-                label=f"Bottom: {old_y0:.2f} -> {y0:.2f}",
-                narration="Bottom side expanded.",
-                side="bottom",
-                from_coord=round(old_y0, 4),
-                to_coord=round(y0, 4),
-                rect_after=[round(x0, 4), round(y0, 4),
-                            round(x1, 4), round(y1, 4)],
-                area_after=round((x1 - x0) * (y1 - y0), 4),
-            )
+        if y0 > miny:
+            sdf = _polygon_sdf(rot_poly, 0.5 * (x0 + x1), y0)
+            hi_d = min(y0 - miny, abs(sdf)) if sdf < 0 else y0 - miny
+            if hi_d > 1e-12:
+                lo_d = 0.0
+                for _ in range(SDF_BINARY_STEPS):
+                    mid = 0.5 * (lo_d + hi_d)
+                    if _v(x0, y0 - mid, x1, y1):
+                        lo_d = mid
+                    else:
+                        hi_d = mid
+                y0 -= lo_d
 
-        # Top (clamped)
-        lo_d, hi_d = 0.0, maxy - y1
-        for _ in range(_CABF_STEPS):
-            mid = 0.5 * (lo_d + hi_d)
-            if _v(x0, y0, x1, y1 + mid):
-                lo_d = mid
-            else:
-                hi_d = mid
-        old_y1 = y1
-        y1 = min(y1 + lo_d, _next_y(y1 + lo_d))
-        if emitter and abs(y1 - old_y1) > 1e-12:
-            emitter.emit(
-                phase="BCRS_SOLVE", type_="bcrs_boundary_expand",
-                label=f"Top: {old_y1:.2f} -> {y1:.2f}",
-                narration="Top side expanded.",
-                side="top",
-                from_coord=round(old_y1, 4),
-                to_coord=round(y1, 4),
-                rect_after=[round(x0, 4), round(y0, 4),
-                            round(x1, 4), round(y1, 4)],
-                area_after=round((x1 - x0) * (y1 - y0), 4),
-            )
+        # Top
+        if y1 < maxy:
+            sdf = _polygon_sdf(rot_poly, 0.5 * (x0 + x1), y1)
+            hi_d = min(maxy - y1, abs(sdf)) if sdf < 0 else maxy - y1
+            if hi_d > 1e-12:
+                lo_d = 0.0
+                for _ in range(SDF_BINARY_STEPS):
+                    mid = 0.5 * (lo_d + hi_d)
+                    if _v(x0, y0, x1, y1 + mid):
+                        lo_d = mid
+                    else:
+                        hi_d = mid
+                y1 += lo_d
 
     # Ratio constraint (analytical, from centre)
     if max_ratio > 0.0:
@@ -784,15 +751,34 @@ def _build_rect_from_frame(cx, cy, ux, uy, vx, vy, a, b):
 
 
 # ==========================================================================
-# ⑨ PHASE C — CONTAINMENT CERTIFICATION
+# ⑨ SDF-BASED CONTAINMENT CERTIFICATION
 # ==========================================================================
+def _rect_sdf_max(poly, rect):
+    """SDF at all 4 corners + 4 edge midpoints; return the maximum."""
+    coords = list(rect.exterior.coords)
+    n = len(coords)
+    best = _polygon_sdf(poly, coords[0][0], coords[0][1])
+    for i in range(1, n - 1):
+        v = _polygon_sdf(poly, coords[i][0], coords[i][1])
+        if v > best:
+            best = v
+        mx = (coords[i - 1][0] + coords[i][0]) * 0.5
+        my = (coords[i - 1][1] + coords[i][1]) * 0.5
+        v = _polygon_sdf(poly, mx, my)
+        if v > best:
+            best = v
+    return best
+
+
 def _certify_and_adjust(poly, rect, max_ratio, buf_enabled, buf_value,
                         prepared_poly=None):
+    """SDF-based certification: check corners+midpoints, shrink if needed."""
     if rect is None or rect.is_empty:
         return None, 0.0
-    prep = prepared_poly if prepared_poly is not None else shp_prep(poly)
 
-    if _covers(poly, rect, prep):
+    max_sdf = _rect_sdf_max(poly, rect)
+
+    if max_sdf <= _CERT_EPS:
         final = rect
     else:
         frame = _rect_local_frame(rect)
@@ -800,26 +786,7 @@ def _certify_and_adjust(poly, rect, max_ratio, buf_enabled, buf_value,
             return None, 0.0
         cx, cy, ux, uy, vx, vy, a, b = frame
 
-        max_ov = 0.0
-        for corner in list(rect.exterior.coords)[:-1]:
-            pt = Point(corner)
-            if not prep.covers(pt):
-                d = poly.exterior.distance(pt)
-                for interior in poly.interiors:
-                    ip_poly = Polygon(interior)
-                    if ip_poly.covers(pt):
-                        d = max(d, ip_poly.exterior.distance(pt))
-                max_ov = max(max_ov, d)
-
-        if max_ov < _CERT_EPS:
-            try:
-                overflow_geom = rect.difference(poly)
-                if not overflow_geom.is_empty and overflow_geom.area > 1e-14:
-                    max_ov = math.sqrt(overflow_geom.area) + _CERT_EPS
-            except Exception:
-                max_ov = _CERT_EPS
-
-        shrink = max_ov + _CERT_EPS
+        shrink = max_sdf + _CERT_EPS
         if shrink > min(a, b) * _CERT_MAX_SHRINK:
             return None, 0.0
 
@@ -831,7 +798,7 @@ def _certify_and_adjust(poly, rect, max_ratio, buf_enabled, buf_value,
             new_a = new_b * max_ratio
 
         final = _build_rect_from_frame(cx, cy, ux, uy, vx, vy, new_a, new_b)
-        if not _covers(poly, final, prep):
+        if _rect_sdf_max(poly, final) > _CERT_EPS * 10:
             return None, 0.0
 
     if buf_enabled and buf_value != 0.0:
@@ -870,7 +837,7 @@ def _conservative_inner_fallback(poly, grid_fine, max_ratio,
                 continue
             rect_world = shp_rotate(rect_rot, angle,
                                     origin=centroid, use_radians=False)
-            if _covers(poly, rect_world, prepared_poly):
+            if _rect_sdf_max(poly, rect_world) <= _CERT_EPS:
                 best_rect = rect_world
                 best_area = float(rect_world.area)
                 best_angle = angle
@@ -883,6 +850,7 @@ def _conservative_inner_fallback(poly, grid_fine, max_ratio,
 def _best_effort_shrink_to_cover(poly, rect, max_ratio,
                                  tol=1e-7, max_iter=40,
                                  prepared_poly=None):
+    """SDF-based single-pass shrink — no binary search needed."""
     if rect is None or rect.is_empty:
         return None, 0.0
     frame = _rect_local_frame(rect)
@@ -892,51 +860,26 @@ def _best_effort_shrink_to_cover(poly, rect, max_ratio,
     if a0 <= 0 or b0 <= 0:
         return None, 0.0
 
-    def build(scale):
-        a = a0 * scale;
-        b = b0 * scale
-        if a <= 0 or b <= 0:
-            return None
-        if max_ratio > 0.0:
-            if max(a, b) / min(a, b) > max_ratio:
-                if a >= b:
-                    a = b * max_ratio
-                else:
-                    b = a * max_ratio
-        return _build_rect_from_frame(cx, cy, ux, uy, vx, vy, a, b)
+    max_sdf = _rect_sdf_max(poly, rect)
 
-    r1 = build(1.0)
-    if r1 is not None and _covers(poly, r1, prepared_poly):
-        return r1, float(r1.area)
+    if max_sdf <= _CERT_EPS:
+        return rect, float(rect.area)
 
-    lo = 0.0;
-    r_lo = None
-    for s in (0.95, 0.9, 0.8, 0.65, 0.5, 0.35, 0.2, 0.1, 0.05, 0.02, 0.01):
-        r = build(s)
-        if r is not None and _covers(poly, r, prepared_poly):
-            lo = s;
-            r_lo = r;
-            break
-
-    if r_lo is None:
+    shrink = max_sdf + _CERT_EPS * 2
+    a = a0 - shrink;
+    b = b0 - shrink
+    if a <= 0 or b <= 0:
+        return None, 0.0
+    if max_ratio > 0.0 and b > 0 and a / b > max_ratio:
+        a = b * max_ratio
+    if a <= 0 or b <= 0:
         return None, 0.0
 
-    hi = 1.0;
-    best_r = r_lo;
-    best_a = float(r_lo.area)
-    for _ in range(max_iter):
-        if hi - lo < tol:
-            break
-        mid = 0.5 * (lo + hi)
-        r = build(mid)
-        if r is not None and _covers(poly, r, prepared_poly):
-            lo = mid;
-            best_r = r;
-            best_a = float(r.area)
-        else:
-            hi = mid
+    final = _build_rect_from_frame(cx, cy, ux, uy, vx, vy, a, b)
+    if _rect_sdf_max(poly, final) > _CERT_EPS:
+        return None, 0.0
 
-    return best_r, best_a
+    return final, float(final.area)
 
 
 # ==========================================================================
@@ -977,10 +920,9 @@ def _bcrs_cabf_at_angle(rot_poly, seed_bounds, max_ratio, angle_deg=0.0, emitter
     bx0, by0, bx1, by1 = bcrs_rect.bounds
     if emitter:
         emitter.emit(
-            phase="CABF", type_="cabf_iteration_started",
-            label="CABF expansion",
-            narration="CABF expansion starting.",
-            iteration=0,
+            phase="SDF_EXPAND", type_="sdf_expand_started",
+            label="SDF expansion",
+            narration="SDF-guided boundary expansion starting.",
             rect_in=[round(bx0, 4), round(by0, 4),
                      round(bx1, 4), round(by1, 4)],
             area_in=round((bx1 - bx0) * (by1 - by0), 4),
@@ -992,10 +934,9 @@ def _bcrs_cabf_at_angle(rot_poly, seed_bounds, max_ratio, angle_deg=0.0, emitter
     area = (bx1 - bx0) * (by1 - by0)
     if emitter:
         emitter.emit(
-            phase="CABF", type_="cabf_iteration_done",
-            label=f"CABF done: area={area:.1f}",
-            narration="CABF iteration completed.",
-            iteration=0,
+            phase="SDF_EXPAND", type_="sdf_expand_done",
+            label=f"SDF done: area={area:.1f}",
+            narration="SDF-guided boundary expansion completed.",
             rect_out=[round(bx0, 4), round(by0, 4),
                       round(bx1, 4), round(by1, 4)],
             area_out=round(area, 4),
@@ -1016,7 +957,7 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
                            emitter=None):
     """
     Stage 3-7 orchestrator for each Stage 2 candidate:
-    Stage 3 angle refinement -> Stage 4 BCRS -> Stage 5 CABF ->
+    Stage 3 angle refinement -> Stage 4 BCRS -> Stage 5 SDF expansion ->
     Stage 6 certification/fallback -> Stage 7 selection/output.
 
     Critical design: for each candidate the original Stage-1 edge-candidate
@@ -1090,7 +1031,7 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
             angle_try = trial['angle']
             rot_poly = trial['rot_poly']
             seed_bounds = trial['seed_bounds']
-            # BCRS + Clamped CABF
+            # BCRS + SDF expansion
             rect_rot, area_rot = _bcrs_cabf_at_angle(
                 rot_poly, seed_bounds, max_ratio,
                 angle_deg=angle_try, emitter=emitter)
@@ -1182,10 +1123,8 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
         if best_r is None:
             continue
 
-        # Post-rotation final covers guard:
-        # shp_rotate introduces sub-femtometre fp noise even at 0°.
-        # If the certified rect fails covers(), re-certify the world rect.
-        if prepared_poly is not None and not prepared_poly.covers(best_r):
+        # Post-rotation SDF check — shp_rotate introduces fp noise even at 0°.
+        if best_r is not None and _rect_sdf_max(poly, best_r) > _CERT_EPS:
             best_r2, best_a2 = _certify_and_adjust(
                 poly, best_r, max_ratio, False, 0.0, prepared_poly)
             if best_r2 is not None:
