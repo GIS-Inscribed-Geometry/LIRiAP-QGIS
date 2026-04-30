@@ -407,7 +407,102 @@ def _edge_angles(poly):
 
 
 # ==========================================================================
-# ⑦ COARSE GRID SOLVER
+# ⑦ FAST-PATH: SIMPLE CONVEX POLYGONS
+# ==========================================================================
+
+def _fast_path_solve(poly):
+    """
+    Detect simple convex polygons where the optimal rectangle is
+    guaranteed to be edge-aligned, and solve directly via grid-solve
+    + SDF expansion for each edge angle.
+
+    Handles:
+    1. Rectangle (4 vertices, right angles) → identity, O(1)
+    2. Simple convex (≤ 8 vertices, no holes, near-convex) →
+       grid-solve at each unique edge angle (60-res), SDF expand,
+       certify, return best.
+
+    Returns (rect, area, angle) or None.
+    """
+    coords = list(poly.exterior.coords)[:-1]
+    nv = len(coords)
+    has_holes = bool(poly.interiors)
+
+    # ── Case 1: Rectangle (identity) ─────────────────────────────────────
+    if nv == 4 and not has_holes:
+        for i in range(4):
+            p0 = np.array(coords[i])
+            p1 = np.array(coords[(i + 1) % 4])
+            p2 = np.array(coords[(i + 2) % 4])
+            v1 = p1 - p0;  v2 = p2 - p1
+            n1 = float(np.linalg.norm(v1));  n2 = float(np.linalg.norm(v2))
+            if n1 > 0 and n2 > 0 and abs(np.dot(v1, v2) / (n1 * n2)) > 1e-6:
+                break
+        else:
+            a = float(poly.area)
+            frame = _rect_local_frame(poly)
+            angle_deg = math.degrees(
+                math.atan2(frame[3], frame[2])) % 90.0 if frame else 0.0
+            return poly, a, angle_deg
+
+    # ── Case 2: Simple convex (edge-aligned optimal guaranteed) ──────────
+    # Criteria: no holes, ≤ 8 vertices, concavity < 0.5 %
+    if has_holes:
+        return None
+    if nv < 3 or nv > 8:
+        return None
+
+    hull = poly.convex_hull
+    hull_area = float(hull.area)
+    poly_area = float(poly.area)
+    if poly_area <= 0 or hull_area / poly_area > 1.005:
+        return None  # too concave — fall back to skeleton
+
+    # Extract unique edge angles
+    raw_angles = []
+    for i in range(len(hull.exterior.coords) - 1):
+        dx = hull.exterior.coords[i + 1][0] - hull.exterior.coords[i][0]
+        dy = hull.exterior.coords[i + 1][1] - hull.exterior.coords[i][1]
+        if abs(dx) > 1e-12 or abs(dy) > 1e-12:
+            a = math.degrees(math.atan2(dy, dx)) % 90.0
+            # Merge within 1°
+            if not any(abs(a - ra) < 1.0 for ra in raw_angles):
+                raw_angles.append(a)
+    # Always include 0° and 45°
+    for fixed in (0, 45):
+        if not any(abs(fixed - ra) < 1.0 for ra in raw_angles):
+            raw_angles.append(float(fixed))
+    raw_angles.sort()
+
+    centroid = poly.centroid
+    best_rect = None
+    best_area = 0.0
+    best_angle = 0.0
+
+    for a in raw_angles:
+        rot = shp_rotate(poly, -a, origin=centroid, use_radians=False)
+        seed, _ = _grid_solve(rot, 60)
+        if seed is None:
+            continue
+        sb = seed.bounds
+        bx0, by0, bx1, by1 = _sdf_expand_rect(
+            rot, sb[0], sb[1], sb[2], sb[3], 0.0)
+        area = (bx1 - bx0) * (by1 - by0)
+        if area <= best_area:
+            continue
+        rect_r = box(bx0, by0, bx1, by1)
+        rect_w = shp_rotate(rect_r, a, origin=centroid, use_radians=False)
+        cert_r, cert_a = _certify_and_adjust(poly, rect_w, 0.0)
+        if cert_r is not None and cert_a > best_area:
+            best_rect, best_area, best_angle = cert_r, cert_a, a
+
+    if best_rect is None:
+        return None
+    return best_rect, best_area, best_angle
+
+
+# ==========================================================================
+# ⑧ COARSE GRID SOLVER
 # ==========================================================================
 
 def _grid_solve(rot_poly, grid_steps):
@@ -641,6 +736,35 @@ def _worker_process_feature(args, emitter=None):
             pass
         if poly is None or poly.is_empty:
             return None
+
+        # ── Fast path: analytically solvable cases ────────────────────────
+        fast = _fast_path_solve(poly)
+        if fast is not None:
+            fp_rect, fp_area, fp_angle = fast
+            fp_ratio = 1.0
+            if fp_area > 0:
+                coords_fp = list(fp_rect.exterior.coords)
+                w_fp = math.hypot(coords_fp[1][0] - coords_fp[0][0],
+                                  coords_fp[1][1] - coords_fp[0][1])
+                h_fp = math.hypot(coords_fp[2][0] - coords_fp[1][0],
+                                  coords_fp[2][1] - coords_fp[1][1])
+                fp_ratio = max(w_fp, h_fp) / min(w_fp, h_fp) if min(w_fp, h_fp) > 0 else 1.0
+            if emitter:
+                emitter.emit(
+                    phase="RESULT", type_="final_result",
+                    label=f"Fast-path: area={fp_area:.1f}",
+                    narration="Solved via analytical fast-path.",
+                    rect=[float(fp_rect.bounds[0]), float(fp_rect.bounds[1]),
+                          float(fp_rect.bounds[2]), float(fp_rect.bounds[3])],
+                    area=round(float(fp_area), 4),
+                    angle_deg=round(float(fp_angle), 4),
+                    algorithm="skeleton_fastpath",
+                )
+            return (
+                feat_id, fp_rect.wkt,
+                round(float(fp_area), 4), round(float(fp_angle), 4),
+                round(float(fp_ratio), 4), 0, 0.0, 0,
+            )
 
         if emitter:
             emitter.emit(

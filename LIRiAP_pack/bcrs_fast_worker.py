@@ -1,11 +1,11 @@
 """
 LIRiAP BCRS Fast worker module.
 
-Pure geometry solver for the optimized BCRS/CABF solve path.
+Pure geometry solver for the optimized BCRS solve path.
 No QGIS or Qt runtime dependencies.
 
 Pipeline
-=======
+======
 Same as BCRS Standard:
 Stage 1: Geometry preparation
 Stage 2: Heuristic candidates
@@ -121,10 +121,10 @@ _CERT_MAX_SHRINK = 0.20  # Max symmetric shrink as fraction of shorter side
 _PRUNE_MARGIN = 0.90  # Upper-bound pruning factor
 _SIMPLIFY_THRESHOLD = 300  # Vertex count above which simplification is tried
 _SIMPLIFY_TOL_FRAC = 0.001  # Simplification tol as fraction of short bbox side
-_CABF_ITERS = 3  # CABF outer iterations
-_CABF_STEPS = 24  # Binary-search steps per CABF side
+_EXPAND_ITERS = 3  # Boundary expansion outer iterations
+_EXPAND_STEPS = 24  # Binary-search steps per expansion side
 _ANGLE_DELTA_DEG = 0.5  # ± delta tested around each Brent-polished angle
-_STAGE2_MAX_TRIALS = 2  # Run expensive BCRS/CABF only on top-N angle trials
+_STAGE2_MAX_TRIALS = 2  # Run expensive BCRS only on top-N angle trials
 
 
 # ==========================================================================
@@ -380,7 +380,7 @@ def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio, emitter=None):
     Uses the signed-distance field at each side's midpoint to compute a
     tight upper bound on the expansion distance, then binary-searches to
     the exact boundary using ``prep.covers``.  The SDF bounds are tighter
-    than CABF's raw bounding-box extent, requiring fewer binary steps.
+    than raw bounding-box extent, requiring fewer binary steps.
     """
     minx, miny, maxx, maxy = rot_poly.bounds
     prep = shp_prep(rot_poly)
@@ -413,7 +413,7 @@ def _expand_rect_to_boundary(rot_poly, x0, y0, x1, y1, max_ratio, emitter=None):
 
     SDF_BINARY_STEPS = 10
 
-    for _ in range(_CABF_ITERS):
+    for _ in range(_EXPAND_ITERS):
         # Left
         if x0 > minx:
             sdf = _polygon_sdf(rot_poly, x0, 0.5 * (y0 + y1))
@@ -883,12 +883,12 @@ def _best_effort_shrink_to_cover(poly, rect, max_ratio,
 
 
 # ==========================================================================
-# ⑪ BCRS+CABF AT A GIVEN ANGLE
+# ⑪ BCRS + Boundary Expansion AT A GIVEN ANGLE
 # ==========================================================================
-def _bcrs_cabf_at_angle(rot_poly, seed_bounds, max_ratio, angle_deg=0.0, emitter=None):
+def _bcrs_expand_at_angle(rot_poly, seed_bounds, max_ratio, angle_deg=0.0, emitter=None):
     """
     Stage 4 + Stage 5 in the already-rotated frame:
-    run BCRS boundary-coordinate solve, then clamped CABF expansion.
+    run BCRS boundary-coordinate solve, then clamped boundary expansion.
     Returns (best_rect_in_rotated_frame, area).
     """
     bcrs_rect, bcrs_area = _solve_axis_rect_bcrs(rot_poly, seed_bounds, max_ratio)
@@ -992,7 +992,7 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
             if all(abs(a_try - x) > 0.01 for x in angles_to_try):
                 angles_to_try.append(a_try)
 
-        # ── Stage 4-5: trial ranking, then BCRS + CABF on selected trials ──
+        # ── Stage 4-5: trial ranking, then BCRS + expansion on selected trials ──
         trial_data = []
         for idx_try, angle_try in enumerate(angles_to_try):
             rot_poly = shp_rotate(poly, -angle_try,
@@ -1032,7 +1032,7 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
             rot_poly = trial['rot_poly']
             seed_bounds = trial['seed_bounds']
             # BCRS + SDF expansion
-            rect_rot, area_rot = _bcrs_cabf_at_angle(
+            rect_rot, area_rot = _bcrs_expand_at_angle(
                 rot_poly, seed_bounds, max_ratio,
                 angle_deg=angle_try, emitter=emitter)
 
@@ -1138,7 +1138,7 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
             emitter.emit(
                 phase="RESULT", type_="best_updated",
                 label=f"Best: area={best_a:.1f} ({pct:.1f}%)",
-                narration="Best rectangle after BCRS+CABF.",
+                narration="Best rectangle after BCRS+expansion.",
                 rect=[float(best_r.bounds[0]), float(best_r.bounds[1]),
                       float(best_r.bounds[2]), float(best_r.bounds[3])],
                 area=round(best_a, 4),
@@ -1211,7 +1211,99 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
 
 
 # ==========================================================================
-# ⑬ GEOMETRY PREPARATION
+# ⑬ FAST-PATH: SIMPLE CONVEX POLYGONS
+# ==========================================================================
+
+def _maybe_fast_path(poly):
+    """
+    Return the optimal rectangle for simple convex polygons where the
+    optimal LIR is guaranteed edge-aligned, skipping the full BCRS+expansion
+    pipeline.
+
+    Returns (rect, area, angle, ratio) or None.
+    """
+    coords = list(poly.exterior.coords)[:-1]
+    nv = len(coords)
+    has_holes = bool(poly.interiors)
+
+    # ── Rectangle (identity) ──────────────────────────────────────────────
+    if nv == 4 and not has_holes:
+        for i in range(4):
+            p0 = np.array(coords[i])
+            p1 = np.array(coords[(i + 1) % 4])
+            p2 = np.array(coords[(i + 2) % 4])
+            v1 = p1 - p0;  v2 = p2 - p1
+            n1 = float(np.linalg.norm(v1));  n2 = float(np.linalg.norm(v2))
+            if n1 > 0 and n2 > 0 and abs(np.dot(v1, v2) / (n1 * n2)) > 1e-6:
+                break
+        else:
+            a = float(poly.area)
+            frame = _rect_local_frame(poly)
+            ang = math.degrees(math.atan2(frame[3], frame[2])) % 90.0 if frame else 0.0
+            r_ = 1.0
+            if a > 0:
+                cp = list(poly.exterior.coords)
+                wp = math.hypot(cp[1][0] - cp[0][0], cp[1][1] - cp[0][1])
+                hp = math.hypot(cp[2][0] - cp[1][0], cp[2][1] - cp[1][1])
+                r_ = max(wp, hp) / min(wp, hp) if min(wp, hp) > 0 else 1.0
+            return poly, a, ang, r_
+
+    # ── Simple convex (≤ 8 vertices, near-convex, no holes) ──────────────
+    if has_holes or nv < 3 or nv > 8:
+        return None
+
+    hull = poly.convex_hull
+    hull_area = float(hull.area)
+    poly_area = float(poly.area)
+    if poly_area <= 0 or hull_area / poly_area > 1.005:
+        return None
+
+    raw_angles = []
+    for hci in range(len(hull.exterior.coords) - 1):
+        dx = hull.exterior.coords[hci + 1][0] - hull.exterior.coords[hci][0]
+        dy = hull.exterior.coords[hci + 1][1] - hull.exterior.coords[hci][1]
+        if abs(dx) > 1e-12 or abs(dy) > 1e-12:
+            a = math.degrees(math.atan2(dy, dx)) % 90.0
+            if not any(abs(a - ra) < 1.0 for ra in raw_angles):
+                raw_angles.append(a)
+    for fixed in (0, 45):
+        if not any(abs(fixed - ra) < 1.0 for ra in raw_angles):
+            raw_angles.append(float(fixed))
+    raw_angles.sort()
+
+    centroid = poly.centroid
+    best_rect = None
+    best_area = 0.0
+    best_angle = 0.0
+
+    for a in raw_angles:
+        rot = shp_rotate(poly, -a, origin=centroid, use_radians=False)
+        seed, _ = _solve_axis_rect_grid(rot, 60, 0.0)
+        if seed is None:
+            continue
+        sb = seed.bounds
+        bx0, by0, bx1, by1 = _expand_rect_to_boundary(
+            rot, sb[0], sb[1], sb[2], sb[3], 0.0)
+        area = (bx1 - bx0) * (by1 - by0)
+        if area <= best_area:
+            continue
+        rect_r = box(bx0, by0, bx1, by1)
+        rect_w = shp_rotate(rect_r, a, origin=centroid, use_radians=False)
+        cert_r, cert_a = _certify_and_adjust(poly, rect_w, 0.0, False, 0.0)
+        if cert_r is not None and cert_a > best_area:
+            best_rect, best_area, best_angle = cert_r, cert_a, a
+
+    if best_rect is None:
+        return None
+    cf = list(best_rect.exterior.coords)
+    wf = math.hypot(cf[1][0] - cf[0][0], cf[1][1] - cf[0][1])
+    hf = math.hypot(cf[2][0] - cf[1][0], cf[2][1] - cf[1][1])
+    rf = max(wf, hf) / min(wf, hf) if min(wf, hf) > 0 else 1.0
+    return best_rect, best_area, best_angle, rf
+
+
+# ==========================================================================
+# ⑭ GEOMETRY PREPARATION
 # ==========================================================================
 def _prepare_polygon(geom):
     from shapely.validation import make_valid
@@ -1281,6 +1373,26 @@ def _worker_process_feature(args, emitter=None):
 
         if poly is None or poly.is_empty:
             return None
+
+        # ── Fast path: simple convex cases → skip BCRS entirely ─────────
+        fast = _maybe_fast_path(poly)
+        if fast is not None:
+            fp_r, fp_a, fp_ang, fp_rat = fast
+            if emitter:
+                fp_eb = fp_r.bounds
+                emitter.emit(
+                    phase="RESULT", type_="final_result",
+                    label=f"Fast-path: area={fp_a:.1f}",
+                    narration="Solved via edge-aligned fast-path.",
+                    rect=[float(fp_eb[0]), float(fp_eb[1]),
+                          float(fp_eb[2]), float(fp_eb[3])],
+                    area=round(float(fp_a), 4),
+                    angle_deg=round(float(fp_ang), 4),
+                    algorithm="bcrs_fast_fastpath",
+                )
+            return (feat_id, fp_r.wkt,
+                    round(float(fp_a), 4), round(float(fp_ang), 4),
+                    round(float(fp_rat), 4), 0, 0.0, 0)
 
         if emitter:
             ext_coords = [[float(x), float(y)] for x, y in poly.exterior.coords[:-1]]

@@ -13,9 +13,9 @@ LIRiAP (Largest Inscribed Rectangle in Arbitrary Polygon) is a set of QGIS Proce
 
 Given an input polygon, find a large non axis aligned interior rectangle (concave polygons and polygons with holes supported). In this pack, **four different problem variants** are implemented:
 
-1. **Approximation family**: maximize area quickly, without strict containment certification. Good for finding candidates
-2. **Contained family**: enforce containment certification, but do not run boundary expansion after certification.
-3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF) - contain & extend. This is the only family in this pack intended to mostly solve the full "largest-area, non axis aligned, fully contained rectangle with expansion" target. Best for finding results closer to solves on more limited set of features.
+1. **Approximation family**: maximize area quickly, without strict containment certification. Good for finding candidates.
+2. **Skeleton family**: BCRS-free solver using medial-axis skeleton decomposition for seed generation. Fast alternative to BCRS with different candidate generation approach.
+3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF - historical earlier implementation). The only family in this pack that solves the full "largest-area, non axis aligned, fully contained rectangle with expansion" target for more limited feature sets.
 4. **Axis-Aligned family**: exact fixed-axis solve with vertex-coordinate precision.
 
 ## Result screenshots (constrained to 16:10 resolution)
@@ -28,11 +28,11 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 
 ![Approximation (improved candidate)](media/Approximate_better.png)
 
-### Contained
+### Skeleton
 
-![Contained result](media/Contained.png)
+![Skeleton result](media/Skeleton.png)
 
-### BCRS (Boundary-Coordinate Raster Solve)
+### BCRS (Boundary-Coordinate Raster Solve, CABF - historical earlier implementation)
 
 ![BCRS result](media/BCRS.png)
 
@@ -63,8 +63,8 @@ From the fastest to slowest. BCRS without multithreaded processing is usually th
 | Family        | Primary objective                            | Strict containment               | Boundary expansion |
 | ------------- | -------------------------------------------- | -------------------------------- | ------------------ |
 | Approximation | Fast area-focused search                     | No                               | No                 |
-| Contained     | Certified contained rectangle search         | Yes (unless fallback is enabled) | No                 |
-| BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (CABF)         |
+| Skeleton      | BCRS-free skeleton-guided solver             | Yes (unless fallback is enabled) | No                 |
+| BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (CABF - historical) |
 | Axis-Aligned  | Exact fixed-axis solve                       | Yes (vertex-coordinate)          | N/A                |
 
 Best execution mode by algorithm (@290 @5406 are number of run features in a dataset):
@@ -74,9 +74,7 @@ Best execution mode by algorithm (@290 @5406 are number of run features in a dat
 | ----------------------------- | -------------- | --------------- |
 | Approximation Standard        | 12w            | 12w+chunk       |
 | Approximation Fast            | 12w            | 12w+chunk       |
-| Contained Standard (strict)   | 12w+chunk      | 12w             |
-| Contained Standard (fallback) | 12w+chunk      | 12w+chunk       |
-| Contained Fast (fallback)     | 12w+chunk      | 12w+chunk       |
+| Skeleton                      | 12w            | 12w             |
 | BCRS (strict)                 | 1w             | 1w              |
 | BCRS (fallback)               | 1w             | 1w              |
 | BCRS Fast (fallback)          | 1w             | 1w              |
@@ -99,10 +97,9 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 | ------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Approximation Standard                                  | Fast area-focused approximation                              | Not certified; rectangle can violate containment in difficult cases                                     | No expansion stage                                                 |
 | Approximation Fast                                      | Same as Approximation Standard with lower overhead execution | Not certified; same semantics as Standard                                                               | No expansion stage                                                 |
-| Contained Standard                                      | Certified contained rectangle search                         | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | No expansion stage after certification                             |
-| Contained Fast                                          | Same as Contained Standard with optimized execution          | Same certified/best-effort semantics as Standard                                                        | No expansion stage after certification                             |
-| BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | Includes CABF boundary expansion (full target method in this pack) |
-| BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | Includes CABF boundary expansion                                   |
+| Skeleton                                                | BCRS-free skeleton-guided solver                            | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | No expansion stage                                                 |
+| BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | CABF boundary expansion (historical earlier implementation)     |
+| BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | CABF boundary expansion (historical earlier implementation)       |
 | Axis-Aligned LIR                                        | Exact fixed-axis solve                                       | Exact (vertex-coordinate precision)                                                                     | N/A                                                                |
 
 ## Setting semantics
@@ -127,47 +124,55 @@ Benchmarked with:
 ### Baseline profile (N_WORKERS=1, USE_CHUNKING=False)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN           | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ----------------------- | ---------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | n/a                     | 7.13*                              | 127.25          | 17.8471                  |
-| P2      | Approximation Fast     | n/a                     | 6.98*                              | 125.93          | 18.0415                  |
-| P3      | Contained Standard     | False (strict)          | 30.45                              | 574.13          | 18.8548                  |
-| P4      | Contained Standard     | True (fallback enabled) | 30.75                              | 573.59          | 18.6533                  |
-| P5      | Contained Fast         | True (fallback enabled) | 12.25*                             | 226.05          | 18.4531                  |
-| P6      | BCRS                   | False (strict)          | 42.91                              | 772.05          | 17.9923                  |
-| P7      | BCRS                   | True (fallback enabled) | 42.35                              | 788.03          | 18.6076                  |
-| P8      | BCRS Fast              | True (fallback enabled) | 23.61                              | 445.01          | 18.8484                  |
-| P9      | Axis-Aligned LIR       | True (fallback enabled) | 11.81                              | 120.24          | 10.1812                  |
+| Profile | Algorithm              | TOP_K | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| ------- | ---------------------- | ----- | ---------------------------------- | --------------- | ------------------------ |
+| P1      | Approximation Standard | 1     | 7.13*                              | 127.25          | 17.8471                  |
+| P2      | Approximation Fast     | 1     | 6.98*                              | 125.93          | 18.0415                  |
+| P3      | Skeleton               | 5     | 34.64                              | TBD             | TBD                      |
+| P4      | BCRS                   | 3     | 42.35                              | TBD             | TBD                      |
+| P5      | BCRS Fast              | 3     | 23.61                              | 445.01          | 18.8484                  |
+| P6      | Axis-Aligned LIR       | n/a   | 11.81                              | 120.24          | 10.1812                  |
 
 ### Parallel profile (N_WORKERS=12, USE_CHUNKING=False)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN           | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ----------------------- | ---------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | n/a                     | 5.97*                              | 112.30          | 18.8107                  |
-| P2      | Approximation Fast     | n/a                     | 5.90*                              | 108.43          | 18.3780                  |
-| P3      | Contained Standard     | False (strict)          | 22.27                              | 405.91          | 18.2268                  |
-| P4      | Contained Standard     | True (fallback enabled) | 22.05                              | 410.21          | 18.6036                  |
-| P5      | Contained Fast         | True (fallback enabled) | 12.03*                             | 224.82          | 18.6883                  |
-| P6      | BCRS                   | False (strict)          | 51.83                              | 925.01          | 17.8470                  |
-| P7      | BCRS                   | True (fallback enabled) | 50.88                              | 941.69          | 18.5081                  |
-| P8      | BCRS Fast              | True (fallback enabled) | 29.84                              | 557.11          | 18.6699                  |
-| P9      | Axis-Aligned LIR       | True (fallback enabled) | 14.83                              | 158.53          | 10.6897                  |
+| Profile | Algorithm              | TOP_K | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| ------- | ---------------------- | ----- | ---------------------------------- | --------------- | ------------------------ |
+| P1      | Approximation Standard | 1     | 5.97*                              | 112.30          | 18.8107                  |
+| P2      | Approximation Fast     | 1     | 5.90*                              | 108.43          | 18.3780                  |
+| P3      | Skeleton               | 5     | 34.64                              | TBD             | TBD                      |
+| P4      | BCRS                   | 3     | 50.88                              | TBD             | TBD                      |
+| P5      | BCRS Fast              | 3     | 29.84                              | 557.11          | 18.6699                  |
+| P6      | Axis-Aligned LIR       | n/a   | 14.83                              | 158.53          | 10.6897                  |
 
 ### Parallel + chunking profile (N_WORKERS=12, USE_CHUNKING=True)
 
 
-| Profile | Algorithm              | ALWAYS_RETURN           | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ----------------------- | ---------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | n/a                     | 6.04*                              | 109.76          | 18.1722                  |
-| P2      | Approximation Fast     | n/a                     | 5.90*                              | 108.43          | 18.3780                  |
-| P3      | Contained Standard     | False (strict)          | 21.98                              | 405.95          | 18.4691                  |
-| P4      | Contained Standard     | True (fallback enabled) | 21.96                              | 405.15          | 18.4495                  |
-| P5      | Contained Fast         | True (fallback enabled) | 12.01*                             | 224.82          | 18.7194                  |
-| P6      | BCRS                   | False (strict)          | 51.10                              | **              |                          |
-| P7      | BCRS                   | True (fallback enabled) | 51.30                              | **              |                          |
-| P8      | BCRS Fast              | True (fallback enabled) | 30.19                              | **              |                          |
-| P9      | Axis-Aligned LIR       | True (fallback enabled) | 14.91                              | 157.89          | 10.5912                  |
+| Profile | Algorithm              | TOP_K | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
+| ------- | ---------------------- | ----- | ---------------------------------- | --------------- | ------------------------ |
+| P1      | Approximation Standard | 1     | 6.04*                              | 109.76          | 18.1722                  |
+| P2      | Approximation Fast     | 1     | 5.90*                              | 108.43          | 18.3780                  |
+| P3      | Skeleton               | 5     | 34.64                              | TBD             | TBD                      |
+| P4      | BCRS                   | 3     | 51.30                              | **              |                          |
+| P5      | BCRS Fast              | 3     | 30.19                              | **              |                          |
+| P6      | Axis-Aligned LIR       | n/a   | 14.91                              | 157.89          | 10.5912                  |
+
+### Fill rate benchmark (290 features, default parameters)
+
+Fill rate = rectangle area / polygon area × 100%. Higher is better.
+
+| Algorithm | Mean% | Median% | Min% | Max% | Std% |
+|-----------|-------|---------|------|------|------|
+| Axis-Aligned LIR | 35.87 | 35.43 | 3.41 | 91.69 | 17.08 |
+| Skeleton | 54.96 | 52.58 | 8.12 | 97.52 | 21.21 |
+| BCRS Fast | 55.27 | 53.24 | 7.62 | 97.52 | 20.09 |
+| BCRS | 55.74 | 53.81 | 7.68 | 97.52 | 20.16 |
+
+**Key findings:**
+- Skeleton and BCRS families achieve ~55% fill rate vs ~36% for axis-aligned
+- BCRS marginally leads in mean/median (+0.5-1% over Skeleton)
+- All methods reach similar max fill (~97.5%), indicating ceiling on difficult polygons
+- Skeleton runs slower (34.6s vs 26.1s) but uses different seed generation approach
 
 ## Installation & Usage
 
@@ -250,8 +255,8 @@ Detailed documentation is available in the [GitHub Wiki](https://github.com/Wolr
 - [Home](https://github.com/Wolren/LIRiAP-QGIS/wiki/Home) — Overview and quick start
 - [Algorithms](https://github.com/Wolren/LIRiAP-QGIS/wiki/Algorithms) — Family comparison with flowcharts
 - [Approximation](https://github.com/Wolren/LIRiAP-QGIS/wiki/Approximation) — Approximation algorithm details
-- [Contained](https://github.com/Wolren/LIRiAP-QGIS/wiki/Contained) — Contained algorithm details
-- [BCRS](https://github.com/Wolren/LIRiAP-QGIS/wiki/BCRS) — BCRS algorithm details
+- [Skeleton](https://github.com/Wolren/LIRiAP-QGIS/wiki/Skeleton) — Skeleton algorithm details
+- [BCRS](https://github.com/Wolren/LIRiAP-QGIS/wiki/BCRS) — BCRS algorithm details (CABF historical)
 - [Axis-Aligned](https://github.com/Wolren/LIRiAP-QGIS/wiki/Axis-Aligned) — Exact axis-aligned solver
 - [Complexity](https://github.com/Wolren/LIRiAP-QGIS/wiki/Complexity) — Formal complexity analysis
 - [Foundations](https://github.com/Wolren/LIRiAP-QGIS/wiki/Foundations) — Geometric background
