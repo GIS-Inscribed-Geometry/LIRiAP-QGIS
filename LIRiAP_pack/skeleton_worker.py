@@ -410,7 +410,7 @@ def _edge_angles(poly):
 # ⑦ FAST-PATH: SIMPLE CONVEX POLYGONS
 # ==========================================================================
 
-def _fast_path_solve(poly):
+def _fast_path_solve(poly, max_ratio=0.0):
     """
     Detect simple convex polygons where the optimal rectangle is
     guaranteed to be edge-aligned, and solve directly via grid-solve
@@ -486,13 +486,13 @@ def _fast_path_solve(poly):
             continue
         sb = seed.bounds
         bx0, by0, bx1, by1 = _sdf_expand_rect(
-            rot, sb[0], sb[1], sb[2], sb[3], 0.0)
+            rot, sb[0], sb[1], sb[2], sb[3], max_ratio)
         area = (bx1 - bx0) * (by1 - by0)
         if area <= best_area:
             continue
         rect_r = box(bx0, by0, bx1, by1)
         rect_w = shp_rotate(rect_r, a, origin=centroid, use_radians=False)
-        cert_r, cert_a = _certify_and_adjust(poly, rect_w, 0.0)
+        cert_r, cert_a = _certify_and_adjust(poly, rect_w, max_ratio)
         if cert_r is not None and cert_a > best_area:
             best_rect, best_area, best_angle = cert_r, cert_a, a
 
@@ -738,7 +738,7 @@ def _worker_process_feature(args, emitter=None):
             return None
 
         # ── Fast path: analytically solvable cases ────────────────────────
-        fast = _fast_path_solve(poly)
+        fast = _fast_path_solve(poly, max_ratio=max_ratio)
         if fast is not None:
             fp_rect, fp_area, fp_angle = fast
             fp_ratio = 1.0

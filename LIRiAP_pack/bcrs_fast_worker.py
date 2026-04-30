@@ -1214,7 +1214,7 @@ def _refine_best_candidate(poly, candidates, grid_coarse, grid_fine,
 # ⑬ FAST-PATH: SIMPLE CONVEX POLYGONS
 # ==========================================================================
 
-def _maybe_fast_path(poly):
+def _maybe_fast_path(poly, max_ratio=0.0):
     """
     Return the optimal rectangle for simple convex polygons where the
     optimal LIR is guaranteed edge-aligned, skipping the full BCRS+expansion
@@ -1278,18 +1278,18 @@ def _maybe_fast_path(poly):
 
     for a in raw_angles:
         rot = shp_rotate(poly, -a, origin=centroid, use_radians=False)
-        seed, _ = _solve_axis_rect_grid(rot, 60, 0.0)
+        seed, _ = _solve_axis_rect_grid(rot, 60, max_ratio)
         if seed is None:
             continue
         sb = seed.bounds
         bx0, by0, bx1, by1 = _expand_rect_to_boundary(
-            rot, sb[0], sb[1], sb[2], sb[3], 0.0)
+            rot, sb[0], sb[1], sb[2], sb[3], max_ratio)
         area = (bx1 - bx0) * (by1 - by0)
         if area <= best_area:
             continue
         rect_r = box(bx0, by0, bx1, by1)
         rect_w = shp_rotate(rect_r, a, origin=centroid, use_radians=False)
-        cert_r, cert_a = _certify_and_adjust(poly, rect_w, 0.0, False, 0.0)
+        cert_r, cert_a = _certify_and_adjust(poly, rect_w, max_ratio, False, 0.0)
         if cert_r is not None and cert_a > best_area:
             best_rect, best_area, best_angle = cert_r, cert_a, a
 
@@ -1375,7 +1375,7 @@ def _worker_process_feature(args, emitter=None):
             return None
 
         # ── Fast path: simple convex cases → skip BCRS entirely ─────────
-        fast = _maybe_fast_path(poly)
+        fast = _maybe_fast_path(poly, max_ratio=max_ratio)
         if fast is not None:
             fp_r, fp_a, fp_ang, fp_rat = fast
             if emitter:

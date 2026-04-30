@@ -57,8 +57,6 @@ from shapely.wkb import dumps as _shp_wkb_dumps
 from shapely.wkt import loads as _shp_wkt_loads
 
 from LIRiAP_pack.axis_aligned_lir_worker import _worker_process_feature as aa_worker
-from LIRiAP_pack.contained_standard_worker import _worker_process_feature as cont_worker
-from LIRiAP_pack.contained_fast_worker import _worker_process_feature as cont_fast_worker
 from LIRiAP_pack.bcrs_worker import _worker_process_feature as bcrs_worker
 from LIRiAP_pack.bcrs_fast_worker import _worker_process_feature as bcrs_fast_worker
 from LIRiAP_pack.approximation_standard_worker import _worker_process_feature as approx_worker
@@ -220,10 +218,6 @@ def solve_with_algorithm(poly: ShapelyPolygon, algorithm: str, max_ratio: float 
         # angle_step=5, grid_coarse=40, grid_fine=120, max_ratio=1.6, top_k=3
         if algorithm == "axis_aligned":
             result = aa_worker((fid, wkb, 0.0, 120, max_ratio, False, 0.0, False))
-        elif algorithm == "contained":
-            result = cont_worker((fid, wkb, 5, 40, 120, max_ratio, False, 0.0, 3, False))
-        elif algorithm == "contained_fast":
-            result = cont_fast_worker((fid, wkb, 5, 40, 120, max_ratio, False, 0.0, 3, False))
         elif algorithm == "bcrs":
             result = bcrs_worker((fid, wkb, 5, 40, 120, max_ratio, False, 0.0, 3, False))
         elif algorithm == "bcrs_fast":
@@ -247,9 +241,6 @@ def solve_with_algorithm(poly: ShapelyPolygon, algorithm: str, max_ratio: float 
         elif algorithm in ("bcrs", "bcrs_fast", "skeleton"):
             _, wkt, area, angle, ratio, cand_rank, stage2_gain, best_effort = result
             return (_shp_wkt_loads(wkt), area, angle, f"rank={cand_rank}", ratio, best_effort)
-        elif algorithm in ("contained", "contained_fast"):
-            _, wkt, area, angle, ratio, cand_rank, stage2_gain, best_effort = result
-            return (_shp_wkt_loads(wkt), area, angle, result[5], ratio, best_effort)
         elif algorithm in ("approximation", "approximation_fast"):
             _, wkt, area, angle, ratio = result
             return (_shp_wkt_loads(wkt), area, angle, algorithm, ratio, False)
@@ -283,8 +274,6 @@ def generate_preview_html(output_dir: Path, algorithm: str = "axis_aligned", max
 
     algorithm_names = {
         "axis_aligned": "Axis-Aligned LIR",
-        "contained": "Contained Standard",
-        "contained_fast": "Contained Fast", 
         "bcrs": "BCRS",
         "bcrs_fast": "BCRS Fast",
         "skeleton": "Skeleton",
@@ -292,7 +281,7 @@ def generate_preview_html(output_dir: Path, algorithm: str = "axis_aligned", max
         "approximation_fast": "Approximation Fast",
     }
 
-    choices = ["axis_aligned", "contained", "contained_fast", "bcrs", "bcrs_fast", "skeleton", "approximation", "approximation_fast"]
+    choices = ["axis_aligned", "bcrs", "bcrs_fast", "skeleton", "approximation", "approximation_fast"]
 
     html = f'''<!DOCTYPE html>
 <html>
@@ -385,7 +374,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LIRiAP Visual Preview Tool")
     parser.add_argument(
         "--algorithm", "-a",
-        choices=["axis_aligned", "contained", "contained_fast", "bcrs", "bcrs_fast", "skeleton", "approximation", "approximation_fast"],
+        choices=["axis_aligned", "bcrs", "bcrs_fast", "skeleton", "approximation", "approximation_fast"],
         default="axis_aligned",
         help="Algorithm to use (default: axis_aligned)",
     )

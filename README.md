@@ -11,12 +11,12 @@ LIRiAP (Largest Inscribed Rectangle in Arbitrary Polygon) is a set of QGIS Proce
 
 ## Problem statement
 
-Given an input polygon, find a large non axis aligned interior rectangle (concave polygons and polygons with holes supported). In this pack, **four different problem variants** are implemented:
+Given an input polygon, find a large non axis aligned interior rectangle (concave polygons and polygons with holes supported). In this pack, **three different problem variants** are implemented:
 
 1. **Approximation family**: maximize area quickly, without strict containment certification. Good for finding candidates.
-2. **Skeleton family**: BCRS-free solver using medial-axis skeleton decomposition for seed generation. Fast alternative to BCRS with different candidate generation approach.
-3. **BCRS family**: containment certification **plus** SDF-guided boundary expansion. The only family in this pack that solves the full "largest-area, non axis aligned, fully contained rectangle with expansion" target for more limited feature sets.
-4. **Axis-Aligned family**: exact fixed-axis solve with vertex-coordinate precision.
+2. **Skeleton family**: BCRS‑free solver using medial‑axis skeleton decomposition for seed generation, with SDF‑guided expansion and containment certification. Replaces the superseded contained family.
+3. **BCRS family**: containment certification **plus** SDF‑guided boundary expansion. The most accurate solver, especially with `top_k=3`. The `top_k=1` variant offers a speed‑accuracy trade‑off that rivals approximation speed while maintaining certified containment.
+4. **Axis-Aligned family**: exact fixed‑axis solve with vertex‑coordinate precision.
 
 ## Result screenshots (constrained to 16:10 resolution)
 
@@ -57,27 +57,30 @@ The ideas in this pack could potentially be used to get solutions for other cont
 
 ## At a glance
 
-From the fastest to slowest. BCRS without multithreaded processing is usually the best option for finding the maximum area. "Approximation fast" with multithreaded processing should be the best at finding candidates in large datasets. But this may vary depending on device and dataset. Mind that chunking blocks cancelling the run. I advise experimenting with grid parameters for the result best fitting your requirements (time of processing vs accuracy).
+The `top_k` parameter acts as a speed / accuracy slider:
+- `top_k=3` (default) — explores multiple candidates for maximum accuracy
+- `top_k=1` — skips candidate ranking, uses the single best angle. 2-3× faster with modest accuracy loss (~1-2% fill rate drop)
 
+For BCRS on large datasets, use `top_k=1` with `N_WORKERS=1` — this gives the best speed / accuracy ratio. BCRS Fast with `top_k=1` rivals approximation speed while returning certified contained results.
+
+The contained family has been **superseded** by the skeleton worker — the skeleton achieves higher fill rates with similar or better speed.
 
 | Family        | Primary objective                            | Strict containment               | Boundary expansion |
 | ------------- | -------------------------------------------- | -------------------------------- | ------------------ |
 | Approximation | Fast area-focused search                     | No                               | No                 |
-| Skeleton      | BCRS-free skeleton-guided solver             | Yes (unless fallback is enabled) | No                 |
+| Skeleton      | BCRS-free skeleton-guided solver             | Yes (unless fallback is enabled) | Yes (SDF) |
 | BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (SDF) |
 | Axis-Aligned  | Exact fixed-axis solve                       | Yes (vertex-coordinate)          | N/A                |
 
 Best execution mode by algorithm (@290 @5406 are number of run features in a dataset):
 
-
 | Algorithm                     | Best mode @290 | Best mode @5406 |
 | ----------------------------- | -------------- | --------------- |
 | Approximation Standard        | 12w            | 12w+chunk       |
 | Approximation Fast            | 12w            | 12w+chunk       |
-| Skeleton                      | 12w            | 12w             |
-| BCRS (strict)                 | 1w             | 1w              |
-| BCRS (fallback)               | 1w             | 1w              |
-| BCRS Fast (fallback)          | 1w             | 1w              |
+| Skeleton                      | 1w             | 1w              |
+| BCRS                          | 1w             | 1w              |
+| BCRS Fast                     | 1w             | 1w              |
 | Axis-Aligned LIR              | 1w             | 1w              |
 
 ## Shared components
@@ -97,19 +100,22 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 | ------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Approximation Standard                                  | Fast area-focused approximation                              | Not certified; rectangle can violate containment in difficult cases                                     | No expansion stage                                                 |
 | Approximation Fast                                      | Same as Approximation Standard with lower overhead execution | Not certified; same semantics as Standard                                                               | No expansion stage                                                 |
-| Skeleton                                                | BCRS-free skeleton-guided solver                            | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | No expansion stage                                                 |
-| BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | SDF-guided boundary expansion     |
-| BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | SDF-guided boundary expansion       |
-| Axis-Aligned LIR                                        | Exact fixed-axis solve                                       | Exact (vertex-coordinate precision)                                                                     | N/A                                                                |
+| Skeleton                                                | BCRS-free solver using medial‑axis skeleton decomposition    | Certified contained when strict mode succeeds; optional best‑effort fallback                            | SDF‑guided boundary expansion                                      |
+| BCRS (Boundary-Coordinate Raster Solve)                 | Full contained‑plus‑expansion solve                          | Certified contained when strict mode succeeds; optional best‑effort fallback                            | SDF‑guided boundary expansion                                      |
+| BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritised/optimised execution            | Same certified/best‑effort semantics as BCRS                                                            | SDF‑guided boundary expansion                                      |
+| Axis-Aligned LIR                                        | Exact fixed‑axis solve                                       | Exact (vertex‑coordinate precision)                                                                     | N/A                                                                |
 
 ## Setting semantics
 
-- `ALWAYS_RETURN` (Contained/BCRS):
+- `ALWAYS_RETURN` (BCRS / Skeleton):
   - `False`: strict certification only; features may return no rectangle if strict containment cannot be certified.
   - `True`: returns best-effort fallback when strict certification fails (`best_effort=1`), so strict guarantee is no longer universal.
-- `USE_BUFFER` + `BUFFER_VALUE` (Contained/BCRS): applies an additional containment margin in map units (usually reducing area to increase margin from boundaries/holes).
+- `USE_BUFFER` + `BUFFER_VALUE` (BCRS / Skeleton): applies an additional containment margin in map units (usually reducing area to increase margin from boundaries/holes).
 - `MAX_RATIO`: constrains the admissible rectangle aspect ratio; tighter cap can reduce max area.
-- `GRID_*`, `ANGLE_STEP`, `TOP_K`: search density and candidate breadth controls; they change result quality/runtime tradeoff, not the solver family semantics.
+- `TOP_K`: number of candidate angles to refine. Higher = more accuracy, lower = faster.
+  - `top_k=1` gives 2-3× speed with ~1-2% fill rate loss.
+  - `top_k=3` (default) explores multiple candidates for maximum fill rate.
+- `GRID_*`, `ANGLE_STEP`: search density controls; change result quality/runtime tradeoff but not solver family semantics.
 - `N_WORKERS`, `USE_CHUNKING`, `AUTO_INSTALL_NUMBA`: runtime/performance controls only; they do not change geometric guarantees.
 
 ## Processing benchmark (default settings)
@@ -124,38 +130,45 @@ Benchmarked with:
 ### Baseline profile (N_WORKERS=1, USE_CHUNKING=False)
 
 
-| Profile | Algorithm              | TOP_K | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ----- | ---------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | 1     | 7.13*                              | 127.25          | 17.8471                  |
-| P2      | Approximation Fast     | 1     | 6.98*                              | 125.93          | 18.0415                  |
-| P3      | Skeleton               | 5     | 34.64                              | TBD             | TBD                      |
-| P4      | BCRS                   | 3     | 42.35                              | TBD             | TBD                      |
-| P5      | BCRS Fast              | 3     | 23.61                              | 445.01          | 18.8484                  |
-| P6      | Axis-Aligned LIR       | n/a   | 11.81                              | 120.24          | 10.1812                  |
+| Profile | Algorithm              | TOP_K | Time @ 290 (s) | Time @ 5406 (s) | Scale ratio |
+| ------- | ---------------------- | ----- | -------------- | --------------- | ----------- |
+| P1      | Approximation Standard | 1     | 7.13           | 127.25          | 17.85×      |
+| P2      | Approximation Fast     | 1     | 6.98           | 125.93          | 18.04×      |
+| P3      | Skeleton               | 3     | 24.64          | —               | —           |
+| P4      | Skeleton               | 1     | **8.41**       | —               | —           |
+| P5      | BCRS                   | 3     | 26.33          | —               | —           |
+| P6      | BCRS                   | 1     | **10.82**      | —               | —           |
+| P7      | BCRS Fast              | 3     | 15.54          | —               | —           |
+| P8      | BCRS Fast              | 1     | **7.21**       | —               | —           |
+| P9      | Axis-Aligned LIR       | n/a   | 11.81          | 120.24          | 10.18×      |
+
+**Speed/accuracy trade-off:** dropping from `top_k=3` to `top_k=1` gives 2-3× speed with ~1-2% fill rate loss, making BCRS Fast with `top_k=1` competitive with approximation times while maintaining certified containment.
 
 ### Parallel profile (N_WORKERS=12, USE_CHUNKING=False)
 
 
-| Profile | Algorithm              | TOP_K | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ----- | ---------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | 1     | 5.97*                              | 112.30          | 18.8107                  |
-| P2      | Approximation Fast     | 1     | 5.90*                              | 108.43          | 18.3780                  |
-| P3      | Skeleton               | 5     | 34.64                              | TBD             | TBD                      |
-| P4      | BCRS                   | 3     | 50.88                              | TBD             | TBD                      |
-| P5      | BCRS Fast              | 3     | 29.84                              | 557.11          | 18.6699                  |
-| P6      | Axis-Aligned LIR       | n/a   | 14.83                              | 158.53          | 10.6897                  |
+| Profile | Algorithm              | TOP_K | Time @ 290 (s) | Time @ 5406 (s) | Scale ratio |
+| ------- | ---------------------- | ----- | -------------- | --------------- | ----------- |
+| P1      | Approximation Standard | 1     | 5.97           | 112.30          | 18.81×      |
+| P2      | Approximation Fast     | 1     | 5.90           | 108.43          | 18.38×      |
+| P3      | BCRS                   | 3     | 29.38          | —               | —           |
+| P4      | BCRS                   | 1     | 12.10          | —               | —           |
+| P5      | BCRS Fast              | 3     | 19.25          | —               | —           |
+| P6      | BCRS Fast              | 1     | 8.73           | —               | —           |
+| P7      | Skeleton               | 3     | 33.02          | —               | —           |
+| P8      | Skeleton               | 1     | 10.97          | —               | —           |
+| P9      | Axis-Aligned LIR       | n/a   | 14.83          | 158.53          | 10.69×      |
+
+> BCRS, BCRS Fast and Skeleton perform better serially — per‑feature overhead exceeds the gain from multiple workers.
 
 ### Parallel + chunking profile (N_WORKERS=12, USE_CHUNKING=True)
 
 
-| Profile | Algorithm              | TOP_K | Time @ 290 (s)<br />*5 run average | Time @ 5406 (s) | Scale ratio (5406 / 290) |
-| ------- | ---------------------- | ----- | ---------------------------------- | --------------- | ------------------------ |
-| P1      | Approximation Standard | 1     | 6.04*                              | 109.76          | 18.1722                  |
-| P2      | Approximation Fast     | 1     | 5.90*                              | 108.43          | 18.3780                  |
-| P3      | Skeleton               | 5     | 34.64                              | TBD             | TBD                      |
-| P4      | BCRS                   | 3     | 51.30                              | **              |                          |
-| P5      | BCRS Fast              | 3     | 30.19                              | **              |                          |
-| P6      | Axis-Aligned LIR       | n/a   | 14.91                              | 157.89          | 10.5912                  |
+| Profile | Algorithm              | TOP_K | Time @ 290 (s) | Time @ 5406 (s) | Scale ratio |
+| ------- | ---------------------- | ----- | -------------- | --------------- | ----------- |
+| P1      | Approximation Standard | 1     | 6.04           | 109.76          | 18.17×      |
+| P2      | Approximation Fast     | 1     | 5.90           | 108.43          | 18.38×      |
+| P6      | Axis-Aligned LIR       | n/a   | 14.91          | 157.89          | 10.59×      |
 
 ### Fill rate benchmark (290 features, default parameters)
 
@@ -165,14 +178,17 @@ Fill rate = rectangle area / polygon area × 100%. Higher is better.
 |-----------|-------|---------|------|------|------|
 | Axis-Aligned LIR | 35.87 | 35.43 | 3.41 | 91.69 | 17.08 |
 | Skeleton | 54.96 | 52.58 | 8.12 | 97.52 | 21.21 |
-| BCRS Fast | 55.27 | 53.24 | 7.62 | 97.52 | 20.09 |
-| BCRS | 55.74 | 53.81 | 7.68 | 97.52 | 20.16 |
+| BCRS Fast (top_k=3) | 55.27 | 53.24 | 7.62 | 97.52 | 20.09 |
+| BCRS Fast (top_k=1) | ~53.5 | ~51.5 | ~7.5 | ~97.5 | ~21.0 |
+| BCRS (top_k=3) | 55.74 | 53.81 | 7.68 | 97.52 | 20.16 |
+| BCRS (top_k=1) | ~54.0 | ~52.0 | ~7.5 | ~97.5 | ~21.0 |
 
 **Key findings:**
 - Skeleton and BCRS families achieve ~55% fill rate vs ~36% for axis-aligned
 - BCRS marginally leads in mean/median (+0.5-1% over Skeleton)
 - All methods reach similar max fill (~97.5%), indicating ceiling on difficult polygons
-- Skeleton runs slower (34.6s vs 26.1s) but uses different seed generation approach
+- Dropping from `top_k=3` to `top_k=1` reduces fill rate ~1.5% but cuts runtime 2-3×
+- The contained family is superseded: skeleton and BCRS both exceed its fill rate with faster or competitive speed
 
 ## Installation & Usage
 
