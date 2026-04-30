@@ -15,7 +15,7 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 
 1. **Approximation family**: maximize area quickly, without strict containment certification. Good for finding candidates.
 2. **Skeleton family**: BCRS-free solver using medial-axis skeleton decomposition for seed generation. Fast alternative to BCRS with different candidate generation approach.
-3. **BCRS family**: containment certification **plus** boundary-coordinate expansion (CABF - historical earlier implementation). The only family in this pack that solves the full "largest-area, non axis aligned, fully contained rectangle with expansion" target for more limited feature sets.
+3. **BCRS family**: containment certification **plus** SDF-guided boundary expansion. The only family in this pack that solves the full "largest-area, non axis aligned, fully contained rectangle with expansion" target for more limited feature sets.
 4. **Axis-Aligned family**: exact fixed-axis solve with vertex-coordinate precision.
 
 ## Result screenshots (constrained to 16:10 resolution)
@@ -32,7 +32,7 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 
 ![Skeleton result](media/Skeleton.png)
 
-### BCRS (Boundary-Coordinate Raster Solve, CABF - historical earlier implementation)
+### BCRS (Boundary-Coordinate Raster Solve with SDF expansion)
 
 ![BCRS result](media/BCRS.png)
 
@@ -64,7 +64,7 @@ From the fastest to slowest. BCRS without multithreaded processing is usually th
 | ------------- | -------------------------------------------- | -------------------------------- | ------------------ |
 | Approximation | Fast area-focused search                     | No                               | No                 |
 | Skeleton      | BCRS-free skeleton-guided solver             | Yes (unless fallback is enabled) | No                 |
-| BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (CABF - historical) |
+| BCRS          | Certified contained search + fit improvement | Yes (unless fallback is enabled) | Yes (SDF) |
 | Axis-Aligned  | Exact fixed-axis solve                       | Yes (vertex-coordinate)          | N/A                |
 
 Best execution mode by algorithm (@290 @5406 are number of run features in a dataset):
@@ -98,8 +98,8 @@ All algorithms in `LIRiAP_pack` follow the same structure:
 | Approximation Standard                                  | Fast area-focused approximation                              | Not certified; rectangle can violate containment in difficult cases                                     | No expansion stage                                                 |
 | Approximation Fast                                      | Same as Approximation Standard with lower overhead execution | Not certified; same semantics as Standard                                                               | No expansion stage                                                 |
 | Skeleton                                                | BCRS-free skeleton-guided solver                            | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | No expansion stage                                                 |
-| BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | CABF boundary expansion (historical earlier implementation)     |
-| BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | CABF boundary expansion (historical earlier implementation)       |
+| BCRS (Boundary-Coordinate Raster Solve)                 | Full contained-plus-expansion solve                          | Certified contained when strict mode succeeds; optional best-effort fallback can relax strict guarantee | SDF-guided boundary expansion     |
+| BCRS Fast (Boundary-Coordinate Raster Solve, optimized) | Same as BCRS with prioritized/optimized execution            | Same certified/best-effort semantics as BCRS                                                            | SDF-guided boundary expansion       |
 | Axis-Aligned LIR                                        | Exact fixed-axis solve                                       | Exact (vertex-coordinate precision)                                                                     | N/A                                                                |
 
 ## Setting semantics
@@ -256,7 +256,7 @@ Detailed documentation is available in the [GitHub Wiki](https://github.com/Wolr
 - [Algorithms](https://github.com/Wolren/LIRiAP-QGIS/wiki/Algorithms) — Family comparison with flowcharts
 - [Approximation](https://github.com/Wolren/LIRiAP-QGIS/wiki/Approximation) — Approximation algorithm details
 - [Skeleton](https://github.com/Wolren/LIRiAP-QGIS/wiki/Skeleton) — Skeleton algorithm details
-- [BCRS](https://github.com/Wolren/LIRiAP-QGIS/wiki/BCRS) — BCRS algorithm details (CABF historical)
+- [BCRS](https://github.com/Wolren/LIRiAP-QGIS/wiki/BCRS) — BCRS algorithm details (SDF expansion)
 - [Axis-Aligned](https://github.com/Wolren/LIRiAP-QGIS/wiki/Axis-Aligned) — Exact axis-aligned solver
 - [Complexity](https://github.com/Wolren/LIRiAP-QGIS/wiki/Complexity) — Formal complexity analysis
 - [Foundations](https://github.com/Wolren/LIRiAP-QGIS/wiki/Foundations) — Geometric background

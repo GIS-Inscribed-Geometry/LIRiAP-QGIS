@@ -75,7 +75,7 @@ _ALGORITHM_DETAILS = {
         "</ol>"
         "<p><b>Guarantee and setting semantics</b></p>"
         "<ul>"
-        "<li>This is the historical earlier implementation with boundary expansion (CABF).</li>"
+        "<li>Uses SDF-guided boundary expansion.</li>"
         "<li><code>ALWAYS_RETURN=False</code>: strict certification only (can return no rectangle).</li>"
         "<li><code>ALWAYS_RETURN=True</code>: best-effort fallback allowed.</li>"
         "<li><code>USE_BUFFER/BUFFER_VALUE</code> add containment margin after solve.</li>"
