@@ -240,22 +240,6 @@ Numba will be auto-installed if `AUTO_INSTALL_NUMBA` is enabled, or install manu
 pip install numba
 ```
 
-## Syncing for Release
-
-Before packaging as a QGIS plugin, run the sync script to copy source files to the provider:
-
-**Windows:**
-```powershell
-.\sync_to_provider.ps1
-```
-
-**Linux/Mac:**
-```bash
-bash sync_to_provider.sh
-```
-
-This copies the algorithm and worker files from `LIRiAP_pack/` to `LiRiAP_provider/algorithms/` for distribution.
-
 ## Folder layout
 
 - `LIRiAP_pack/*_algorithm.py`: QGIS Processing wrappers (parameters, execution, output fields, help text).
