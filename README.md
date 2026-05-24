@@ -28,10 +28,6 @@ Given an input polygon, find a large non axis aligned interior rectangle (concav
 
 ![Approximation (improved candidate)](media/Approximate_better.png)
 
-### Skeleton
-
-![Skeleton result](media/Skeleton.png)
-
 ### BCRS (Boundary-Coordinate Raster Solve with SDF expansion)
 
 ![BCRS result](media/BCRS.png)
