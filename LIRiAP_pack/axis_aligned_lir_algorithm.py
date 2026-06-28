@@ -33,14 +33,14 @@ Output Fields
 
 Parameters
 ==========
-AXIS_ANGLE     : Rotation of axis-aligned frame (0=horizontal)
-GRID_FINE     : Fallback grid resolution (if vertices > 500)
-MAX_RATIO     : Aspect ratio constraint (0=unlimited)
+AXIS_ANGLE: Rotation of axis-aligned frame (0=horizontal)
+GRID_FINE: Fallback grid resolution (if vertices > 500)
+MAX_RATIO: Aspect ratio constraint (0=unlimited)
 ALWAYS_RETURN : Enable best-effort fallback
-USE_BUFFER    : Apply containment buffer
-BUFFER_VALUE  : Buffer distance
-N_WORKERS     : Parallel workers (0=auto, 1=serial)
-USE_CHUNKING  : Chunked parallel mode
+USE_BUFFER: Apply containment buffer
+BUFFER_VALUE: Buffer distance
+N_WORKERS: Parallel workers (0=auto, 1=serial)
+USE_CHUNKING: Chunked parallel mode
 AUTO_INSTALL_NUMBA: Auto-install Numba JIT
 
 References
@@ -85,10 +85,10 @@ from axis_aligned_lir_worker import _worker_process_feature, _NUMBA_AVAILABLE
 from help_descriptions import build_short_help
 from numba_bootstrap import ensure_numba
 
-
 # ---------------------------------------------------------------------------
 # Chunk-based parallel execution helper
 # ---------------------------------------------------------------------------
+
 
 def _process_slice(job_array, start, end, shared_params):
     """
@@ -125,6 +125,7 @@ def _process_slice(job_array, start, end, shared_params):
 # QGIS Processing algorithm class
 # ---------------------------------------------------------------------------
 
+
 class InscribedRectangleAxisAligned(QgsProcessingAlgorithm):
     """
     QGIS Processing algorithm that wraps the exact axis-aligned LIR solver.
@@ -134,92 +135,122 @@ class InscribedRectangleAxisAligned(QgsProcessingAlgorithm):
     """
 
     # ── Parameter name constants ────────────────────────────────────────────
-    INPUT            = "INPUT"
-    OUTPUT           = "OUTPUT"
-    AXIS_ANGLE       = "AXIS_ANGLE"
-    GRID_FINE        = "GRID_FINE"
-    MAX_RATIO        = "MAX_RATIO"
-    USE_BUFFER       = "USE_BUFFER"
-    BUFFER_VALUE     = "BUFFER_VALUE"
-    ALWAYS_RETURN    = "ALWAYS_RETURN"
-    N_WORKERS        = "N_WORKERS"
-    USE_CHUNKING     = "USE_CHUNKING"
+    INPUT = "INPUT"
+    OUTPUT = "OUTPUT"
+    AXIS_ANGLE = "AXIS_ANGLE"
+    GRID_FINE = "GRID_FINE"
+    MAX_RATIO = "MAX_RATIO"
+    USE_BUFFER = "USE_BUFFER"
+    BUFFER_VALUE = "BUFFER_VALUE"
+    ALWAYS_RETURN = "ALWAYS_RETURN"
+    N_WORKERS = "N_WORKERS"
+    USE_CHUNKING = "USE_CHUNKING"
     AUTO_INSTALL_NUMBA = "AUTO_INSTALL_NUMBA"
 
     # ── Parameter declaration ───────────────────────────────────────────────
 
     def initAlgorithm(self, config=None):
         """Declare all algorithm parameters."""
-        self.addParameter(QgsProcessingParameterVectorLayer(
-            self.INPUT,
-            self.tr("Input layer (polygons)"),
-            [QgsProcessing.TypeVectorPolygon],
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.AXIS_ANGLE,
-            self.tr("Axis angle [°] — rotation of the 'axis-aligned' frame (0 = horizontal)"),
-            QgsProcessingParameterNumber.Double,
-            defaultValue=0.0,
-            minValue=-360.0,
-            maxValue=360.0,
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.GRID_FINE,
-            self.tr("Fallback uniform grid resolution (used only when vertex density > 500)"),
-            QgsProcessingParameterNumber.Integer,
-            defaultValue=120,
-            minValue=10,
-            maxValue=2000,
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.MAX_RATIO,
-            self.tr("Max aspect ratio long:short (0 = unlimited)"),
-            QgsProcessingParameterNumber.Double,
-            defaultValue=1.6,
-            minValue=0.0,
-            maxValue=20.0,
-        ))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.ALWAYS_RETURN,
-            self.tr("Always return a best-effort rectangle if epsilon-inset certification fails"),
-            defaultValue=True,
-        ))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.USE_BUFFER,
-            self.tr("Apply containment buffer after certification"),
-            defaultValue=False,
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.BUFFER_VALUE,
-            self.tr("Buffer value in map units (negative = inward safety margin)"),
-            QgsProcessingParameterNumber.Double,
-            defaultValue=-0.5,
-            minValue=-1e9,
-            maxValue=1e9,
-            optional=True,
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.N_WORKERS,
-            self.tr("Workers (0 = auto, 1 = serial, >1 = custom)"),
-            QgsProcessingParameterNumber.Integer,
-            defaultValue=1,
-            minValue=0,
-            maxValue=512,
-        ))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.USE_CHUNKING,
-            self.tr("Enable chunked parallel execution"),
-            defaultValue=False,
-        ))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.AUTO_INSTALL_NUMBA,
-            self.tr("Attempt safe Numba auto-install if missing (JIT accelerates the LRH kernel)"),
-            defaultValue=False,
-        ))
-        self.addParameter(QgsProcessingParameterFeatureSink(
-            self.OUTPUT,
-            self.tr("Axis-aligned inscribed rectangles"),
-        ))
+        self.addParameter(
+            QgsProcessingParameterVectorLayer(
+                self.INPUT,
+                self.tr("Input layer (polygons)"),
+                [QgsProcessing.TypeVectorPolygon],
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.AXIS_ANGLE,
+                self.tr(
+                    "Axis angle [°] — rotation of the 'axis-aligned' frame (0 = horizontal)"
+                ),
+                QgsProcessingParameterNumber.Double,
+                defaultValue=0.0,
+                minValue=-360.0,
+                maxValue=360.0,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.GRID_FINE,
+                self.tr(
+                    "Fallback uniform grid resolution (used only when vertex density > 500)"
+                ),
+                QgsProcessingParameterNumber.Integer,
+                defaultValue=120,
+                minValue=10,
+                maxValue=2000,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.MAX_RATIO,
+                self.tr("Max aspect ratio long:short (0 = unlimited)"),
+                QgsProcessingParameterNumber.Double,
+                defaultValue=1.6,
+                minValue=0.0,
+                maxValue=20.0,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ALWAYS_RETURN,
+                self.tr(
+                    "Always return a best-effort rectangle if epsilon-inset certification fails"
+                ),
+                defaultValue=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.USE_BUFFER,
+                self.tr("Apply containment buffer after certification"),
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.BUFFER_VALUE,
+                self.tr("Buffer value in map units (negative = inward safety margin)"),
+                QgsProcessingParameterNumber.Double,
+                defaultValue=-0.5,
+                minValue=-1e9,
+                maxValue=1e9,
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.N_WORKERS,
+                self.tr("Workers (0 = auto, 1 = serial, >1 = custom)"),
+                QgsProcessingParameterNumber.Integer,
+                defaultValue=1,
+                minValue=0,
+                maxValue=512,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.USE_CHUNKING,
+                self.tr("Enable chunked parallel execution"),
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.AUTO_INSTALL_NUMBA,
+                self.tr(
+                    "Attempt safe Numba auto-install if missing (JIT accelerates the LRH kernel)"
+                ),
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT,
+                self.tr("Axis-aligned inscribed rectangles"),
+            )
+        )
 
     # ── Main processing ─────────────────────────────────────────────────────
 
@@ -239,40 +270,46 @@ class InscribedRectangleAxisAligned(QgsProcessingAlgorithm):
         6. Write results to the output sink in original feature order.
         """
         # 1) Parameters
-        layer              = self.parameterAsVectorLayer(parameters, self.INPUT, context)
-        axis_angle         = self.parameterAsDouble(parameters,  self.AXIS_ANGLE, context)
-        grid_fine          = self.parameterAsInt(parameters,     self.GRID_FINE, context)
-        max_ratio          = self.parameterAsDouble(parameters,  self.MAX_RATIO, context)
-        always_return      = self.parameterAsBoolean(parameters, self.ALWAYS_RETURN, context)
-        use_buffer         = self.parameterAsBoolean(parameters, self.USE_BUFFER, context)
-        buf_value          = (self.parameterAsDouble(parameters, self.BUFFER_VALUE, context)
-                              if use_buffer else 0.0)
-        n_workers_in       = self.parameterAsInt(parameters,     self.N_WORKERS, context)
-        use_chunking       = self.parameterAsBoolean(parameters, self.USE_CHUNKING, context)
-        auto_install_numba = self.parameterAsBoolean(parameters, self.AUTO_INSTALL_NUMBA, context)
+        layer = self.parameterAsVectorLayer(parameters, self.INPUT, context)
+        axis_angle = self.parameterAsDouble(parameters, self.AXIS_ANGLE, context)
+        grid_fine = self.parameterAsInt(parameters, self.GRID_FINE, context)
+        max_ratio = self.parameterAsDouble(parameters, self.MAX_RATIO, context)
+        always_return = self.parameterAsBoolean(parameters, self.ALWAYS_RETURN, context)
+        use_buffer = self.parameterAsBoolean(parameters, self.USE_BUFFER, context)
+        buf_value = (
+            self.parameterAsDouble(parameters, self.BUFFER_VALUE, context)
+            if use_buffer
+            else 0.0
+        )
+        n_workers_in = self.parameterAsInt(parameters, self.N_WORKERS, context)
+        use_chunking = self.parameterAsBoolean(parameters, self.USE_CHUNKING, context)
+        auto_install_numba = self.parameterAsBoolean(
+            parameters, self.AUTO_INSTALL_NUMBA, context
+        )
 
         _, installed_now = ensure_numba(feedback, auto_install_numba)
         if installed_now:
-            feedback.pushInfo("Re-run the algorithm to activate Numba JIT acceleration.")
+            feedback.pushInfo(
+                "Re-run the algorithm to activate Numba JIT acceleration."
+            )
 
         # 2) Output schema
         fields = QgsFields()
-        fields.append(QgsField("feat_id",    QVariant.Int))
-        fields.append(QgsField("area",       QVariant.Double))
+        fields.append(QgsField("feat_id", QVariant.Int))
+        fields.append(QgsField("area", QVariant.Double))
         fields.append(QgsField("axis_angle", QVariant.Double))
-        fields.append(QgsField("poly_type",  QVariant.String))
-        fields.append(QgsField("ratio",      QVariant.Double))
+        fields.append(QgsField("poly_type", QVariant.String))
+        fields.append(QgsField("ratio", QVariant.Double))
         fields.append(QgsField("best_effort", QVariant.Int))
 
         sink, dest_id = self.parameterAsSink(
-            parameters, self.OUTPUT, context, fields,
-            QgsWkbTypes.Polygon, layer.crs()
+            parameters, self.OUTPUT, context, fields, QgsWkbTypes.Polygon, layer.crs()
         )
         if sink is None:
             raise QgsProcessingException("Could not create output layer.")
 
         # 3) Serialise features
-        job_array  = []
+        job_array = []
         feat_order = []
         for feat in layer.getFeatures():
             if feedback.isCanceled():
@@ -287,20 +324,24 @@ class InscribedRectangleAxisAligned(QgsProcessingAlgorithm):
             return {self.OUTPUT: dest_id}
 
         # 4) Resolve execution mode
-        total    = len(job_array)
-        cpu      = os.cpu_count() or 1
+        total = len(job_array)
+        cpu = os.cpu_count() or 1
         n_workers = n_workers_in if n_workers_in > 0 else cpu
         n_workers = max(1, min(n_workers, total))
         use_parallel = n_workers > 1 and total > 4
 
         shared_params = (
-            axis_angle, grid_fine, max_ratio,
-            use_buffer, buf_value, always_return,
+            axis_angle,
+            grid_fine,
+            max_ratio,
+            use_buffer,
+            buf_value,
+            always_return,
         )
 
         # 5) Execute
-        results: dict       = {}
-        best_effort_count   = 0
+        results: dict = {}
+        best_effort_count = 0
 
         if not use_parallel or n_workers == 1:
             # ── Serial ───────────────────────────────────────────────────
@@ -319,7 +360,7 @@ class InscribedRectangleAxisAligned(QgsProcessingAlgorithm):
         elif use_chunking:
             # ── Chunked parallel ─────────────────────────────────────────
             base = total // n_workers
-            rem  = total % n_workers
+            rem = total % n_workers
             slices = []
             idx = 0
             for i in range(n_workers):

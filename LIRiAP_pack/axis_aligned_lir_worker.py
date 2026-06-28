@@ -98,11 +98,12 @@ except Exception:
 # ① FAST FEASIBILITY CHECK  (unused but preserved)
 # ==========================================================================
 
+
 def _fast_feasibility_check(
-        poly: Polygon,
-        height: float,
-        width: float,
-        sample_count: int = 16,
+    poly: Polygon,
+    height: float,
+    width: float,
+    sample_count: int = 16,
 ) -> bool:
     if height <= 0 or width <= 0:
         return False
@@ -112,7 +113,7 @@ def _fast_feasibility_check(
     if height > poly_height or width > poly_width:
         return False
     from shapely.ops import unary_union
-    from shapely.geometry import Point
+
     shrunk = poly.buffer(-height / 2.0, join_style=2)
     if shrunk.is_empty:
         return False
@@ -154,10 +155,11 @@ def _fast_feasibility_check(
 # ② OUTPUT-SENSITIVE SOLVER  (Chung et al. 2025)
 # ==========================================================================
 
+
 def _output_sensitive_solve(
-        poly: Polygon,
-        max_ratio: float,
-        min_known_height: float = 0.0,
+    poly: Polygon,
+    max_ratio: float,
+    min_known_height: float = 0.0,
 ) -> Tuple[Optional[Polygon], float]:
     """
     Output-sensitive LIR solver - O(n log n + n/h) per Chung et al. (2025).
@@ -340,7 +342,9 @@ def _solve_cgal_style(poly: Polygon) -> Tuple[Optional[Polygon], float]:
     return best_rect, best_area
 
 
-def _solve_triangle_fallback(poly: Polygon, max_ratio: float) -> Tuple[Optional[Polygon], float]:
+def _solve_triangle_fallback(
+    poly: Polygon, max_ratio: float
+) -> Tuple[Optional[Polygon], float]:
     """
     Fast coarse-grid search for largest axis-aligned rectangle in a triangle.
     Uses small grid to keep it fast while still finding valid rects.
@@ -410,7 +414,6 @@ try:
     # Shapely 2.x: use contains_xy (vectorised, no deprecation warning)
     from shapely import contains_xy as _shp_contains_xy
 
-
     def _mask_from_poly(poly, xx_flat, yy_flat):
         """Return boolean array: True where point (xx_flat[i], yy_flat[i]) is strictly inside poly."""
         return _shp_contains_xy(poly, xx_flat, yy_flat)
@@ -420,14 +423,12 @@ except ImportError:
         # Shapely 1.x fallback: shapely.vectorized.contains
         from shapely.vectorized import contains as _shp_contains_vec
 
-
         def _mask_from_poly(poly, xx_flat, yy_flat):
             """Return boolean array: True where point (xx_flat[i], yy_flat[i]) is strictly inside poly."""
             return _shp_contains_vec(poly, xx_flat, yy_flat)
 
     except ImportError:
         import shapely as _shp2
-
 
         def _mask_from_poly(poly, xx_flat, yy_flat):
             """Return boolean array: True where point (xx_flat[i], yy_flat[i]) is strictly inside poly."""
@@ -439,10 +440,11 @@ except ImportError:
 # Scanline mask builder — O(n*v) instead of O(v²) cell-by-cell checks
 # --------------------------------------------------------------------------
 
+
 def _ring_intervals_at_y(
-        coords: np.ndarray,
-        y: float,
-        eps: float,
+    coords: np.ndarray,
+    y: float,
+    eps: float,
 ) -> list[Tuple[float, float]]:
     """
     Return sorted inside x-intervals for a single closed ring at horizontal line y.
@@ -484,8 +486,8 @@ def _ring_intervals_at_y(
 
 
 def _merge_intervals(
-        intervals: list[Tuple[float, float]],
-        tol: float,
+    intervals: list[Tuple[float, float]],
+    tol: float,
 ) -> list[Tuple[float, float]]:
     """Merge overlapping/touching intervals."""
     if not intervals:
@@ -501,9 +503,9 @@ def _merge_intervals(
 
 
 def _intersect_intervals(
-        a: list[Tuple[float, float]],
-        b: list[Tuple[float, float]],
-        tol: float,
+    a: list[Tuple[float, float]],
+    b: list[Tuple[float, float]],
+    tol: float,
 ) -> list[Tuple[float, float]]:
     """Intersect two sorted interval lists."""
     if not a or not b:
@@ -525,9 +527,9 @@ def _intersect_intervals(
 
 
 def _subtract_intervals(
-        base: list[Tuple[float, float]],
-        forbidden: list[Tuple[float, float]],
-        tol: float,
+    base: list[Tuple[float, float]],
+    forbidden: list[Tuple[float, float]],
+    tol: float,
 ) -> list[Tuple[float, float]]:
     """Subtract forbidden intervals from base intervals."""
     if not base:
@@ -554,11 +556,11 @@ def _subtract_intervals(
 
 
 def _mark_row_from_intervals(
-        mask: np.ndarray,
-        row_idx: int,
-        xs_v: np.ndarray,
-        intervals: list[Tuple[float, float]],
-        tol: float,
+    mask: np.ndarray,
+    row_idx: int,
+    xs_v: np.ndarray,
+    intervals: list[Tuple[float, float]],
+    tol: float,
 ) -> None:
     """Mark cells in row_idx whose full x-span lies inside one of the intervals."""
     if not intervals:
@@ -592,10 +594,10 @@ def _mark_row_from_intervals(
 
 
 def _build_row_mask_scanline(
-        poly: Polygon,
-        xs_v: np.ndarray,
-        ys_v: np.ndarray,
-        emitter=None,
+    poly: Polygon,
+    xs_v: np.ndarray,
+    ys_v: np.ndarray,
+    emitter=None,
 ) -> np.ndarray:
     """
     Build valid cell mask using conservative scanline interval filling.
@@ -650,20 +652,30 @@ def _build_row_mask_scanline(
 
         if slab_h <= tiny_tol:
             if emitter:
-                emitter.emit("MASK", "mask_row_started",
-                             f"Row {i} (skip, slab too thin)",
-                             f"Row {i} skipped: slab height below tolerance.",
-                             row_idx=i, y0=float(y0), y1=float(y1),
-                             y_mid=float(0.5 * (y0 + y1)))
+                emitter.emit(
+                    "MASK",
+                    "mask_row_started",
+                    f"Row {i} (skip, slab too thin)",
+                    f"Row {i} skipped: slab height below tolerance.",
+                    row_idx=i,
+                    y0=float(y0),
+                    y1=float(y1),
+                    y_mid=float(0.5 * (y0 + y1)),
+                )
             continue
 
         if emitter:
             y_mid = float(0.5 * (y0 + y1))
-            emitter.emit("MASK", "mask_row_started",
-                         f"Row {i}",
-                         f"Scanline PIP test starting for row {i}.",
-                         row_idx=i, y0=float(y0), y1=float(y1),
-                         y_mid=y_mid)
+            emitter.emit(
+                "MASK",
+                "mask_row_started",
+                f"Row {i}",
+                f"Scanline PIP test starting for row {i}.",
+                row_idx=i,
+                y0=float(y0),
+                y1=float(y1),
+                y_mid=y_mid,
+            )
 
         if hole_y_ranges:
             row_in_hole = False
@@ -676,8 +688,12 @@ def _build_row_mask_scanline(
                     break
 
             if not row_in_hole:
-                outer_y0 = _ring_intervals_at_y(exterior_coords, y0 + tiny_tol, tiny_tol)
-                outer_y1 = _ring_intervals_at_y(exterior_coords, y1 - tiny_tol, tiny_tol)
+                outer_y0 = _ring_intervals_at_y(
+                    exterior_coords, y0 + tiny_tol, tiny_tol
+                )
+                outer_y1 = _ring_intervals_at_y(
+                    exterior_coords, y1 - tiny_tol, tiny_tol
+                )
                 outer_ints = _intersect_intervals(
                     _merge_intervals(outer_y0, merge_tol),
                     _merge_intervals(outer_y1, merge_tol),
@@ -748,33 +764,44 @@ def _build_row_mask_scanline(
 
         if not valid_ints:
             if emitter:
-                emitter.emit("MASK", "mask_row_intervals",
-                             f"Row {i} — no valid intervals",
-                             f"Row {i} has no valid intervals inside polygon.",
-                             row_idx=i, y_mid=float(0.5 * (y0 + y1)),
-                             intervals=[])
+                emitter.emit(
+                    "MASK",
+                    "mask_row_intervals",
+                    f"Row {i} — no valid intervals",
+                    f"Row {i} has no valid intervals inside polygon.",
+                    row_idx=i,
+                    y_mid=float(0.5 * (y0 + y1)),
+                    intervals=[],
+                )
             continue
 
         _mark_row_from_intervals(mask, i, xs_v, valid_ints, merge_tol)
 
         if emitter:
             ivs_for_event = [[float(a), float(b)] for a, b in valid_ints]
-            emitter.emit("MASK", "mask_row_intervals",
-                         f"Row {i} — {len(ivs_for_event)} interval(s)",
-                         f"Horizontal chord intervals at row {i} mid-y.",
-                         row_idx=i, y_mid=float(0.5 * (y0 + y1)),
-                         intervals=ivs_for_event)
+            emitter.emit(
+                "MASK",
+                "mask_row_intervals",
+                f"Row {i} — {len(ivs_for_event)} interval(s)",
+                f"Horizontal chord intervals at row {i} mid-y.",
+                row_idx=i,
+                y_mid=float(0.5 * (y0 + y1)),
+                intervals=ivs_for_event,
+            )
 
             valid_cols = [int(j) for j in range(n_cols) if mask[i, j]]
             invalid_cols = [int(j) for j in range(n_cols) if not mask[i, j]]
-            emitter.emit("MASK", "mask_cells_set",
-                         f"Row {i} — {len(valid_cols)} valid",
-                         f"Cell-in-polygon mask for row {i}.",
-                         row_idx=i,
-                         valid_cols=valid_cols,
-                         invalid_cols=invalid_cols,
-                         row_valid_count=len(valid_cols),
-                         total_valid_so_far=int(np.sum(mask)))
+            emitter.emit(
+                "MASK",
+                "mask_cells_set",
+                f"Row {i} — {len(valid_cols)} valid",
+                f"Cell-in-polygon mask for row {i}.",
+                row_idx=i,
+                valid_cols=valid_cols,
+                invalid_cols=invalid_cols,
+                row_valid_count=len(valid_cols),
+                total_valid_so_far=int(np.sum(mask)),
+            )
 
         boundary_cols: set[int] = set()
         for x_lo, x_hi in valid_ints:
@@ -789,18 +816,31 @@ def _build_row_mask_scanline(
 
             if col_start < n_cols and mask[i, col_start]:
                 boundary_cols.add(col_start)
-            if col_end - 1 > col_start and col_end - 1 < n_cols and mask[i, col_end - 1]:
+            if (
+                col_end - 1 > col_start
+                and col_end - 1 < n_cols
+                and mask[i, col_end - 1]
+            ):
                 boundary_cols.add(col_end - 1)
 
         if row_has_holes and hole_x_bounds:
-            col_min = min((xs_v[j] for j in range(n_cols) if mask[i, j]), default=float('inf'))
-            col_max = max((xs_v[j + 1] for j in range(n_cols) if mask[i, j]), default=float('-inf'))
-            if col_min < float('inf'):
+            col_min = min(
+                (xs_v[j] for j in range(n_cols) if mask[i, j]), default=float("inf")
+            )
+            col_max = max(
+                (xs_v[j + 1] for j in range(n_cols) if mask[i, j]),
+                default=float("-inf"),
+            )
+            if col_min < float("inf"):
                 for hxb in hole_x_bounds:
                     for hint in hxb:
                         if hint[1] > col_min and hint[0] < col_max:
                             for j in range(n_cols):
-                                if mask[i, j] and xs_v[j] < hint[1] and xs_v[j + 1] > hint[0]:
+                                if (
+                                    mask[i, j]
+                                    and xs_v[j] < hint[1]
+                                    and xs_v[j + 1] > hint[0]
+                                ):
                                     boundary_cols.add(j)
                             break
 
@@ -836,22 +876,25 @@ def _build_row_mask_scanline(
                 rle_rows.append([r, *runs])
         total_valid = int(np.sum(mask))
         total_cells = n_rows * n_cols
-        emitter.emit("MASK", "mask_complete",
-                     f"Mask {total_valid}/{total_cells} cells",
-                     "Full cell-in-polygon mask constructed.",
-                     total_valid=total_valid,
-                     total_cells=total_cells,
-                     fill_ratio=round(total_valid / max(total_cells, 1), 6),
-                     rle_rows=rle_rows)
+        emitter.emit(
+            "MASK",
+            "mask_complete",
+            f"Mask {total_valid}/{total_cells} cells",
+            "Full cell-in-polygon mask constructed.",
+            total_valid=total_valid,
+            total_cells=total_cells,
+            fill_ratio=round(total_valid / max(total_cells, 1), 6),
+            rle_rows=rle_rows,
+        )
 
     return mask
 
 
 def _build_row_mask_original(
-        poly: Polygon,
-        xs_v: np.ndarray,
-        ys_v: np.ndarray,
-        emitter=None,
+    poly: Polygon,
+    xs_v: np.ndarray,
+    ys_v: np.ndarray,
+    emitter=None,
 ) -> np.ndarray:
     """
     Build valid cell mask.
@@ -918,11 +961,11 @@ def _build_row_mask_original(
 
 
 def _fill_intervals_from_xs(
-        mask: np.ndarray,
-        row_idx: int,
-        xs_v: np.ndarray,
-        x_left: float,
-        x_right: float,
+    mask: np.ndarray,
+    row_idx: int,
+    xs_v: np.ndarray,
+    x_left: float,
+    x_right: float,
 ) -> None:
     """
     Fill mask[row_idx, col_start:col_end] = True where xs_v[col] interval
@@ -953,10 +996,10 @@ try:
 
     _NUMBA_AVAILABLE = True
 except ImportError:
+
     def _njit(fn=None, **kw):
         """Null decorator used when Numba is not installed."""
         return fn if fn is not None else (lambda f: f)
-
 
     _NUMBA_AVAILABLE = False
 
@@ -990,9 +1033,9 @@ def _clip_rect_to_poly(poly: Polygon, rect: Polygon) -> Optional[Polygon]:
         return None
     if inter.is_empty:
         return None
-    if inter.geom_type == 'MultiPolygon':
+    if inter.geom_type == "MultiPolygon":
         inter = max(inter.geoms, key=lambda g: g.area)
-    if inter.geom_type != 'Polygon':
+    if inter.geom_type != "Polygon":
         return None
     minx, miny, maxx, maxy = inter.bounds
     if maxx - minx < 1e-9 or maxy - miny < 1e-9:
@@ -1003,6 +1046,7 @@ def _clip_rect_to_poly(poly: Polygon, rect: Polygon) -> Optional[Polygon]:
 # ==========================================================================
 # ① JIT HISTOGRAM KERNEL  (variable-pitch)
 # ==========================================================================
+
 
 @_njit(cache=True)
 def _histogram_kernel_vp(heights, xs, ys, row_idx, max_ratio):
@@ -1105,6 +1149,7 @@ def _histogram_kernel_vp(heights, xs, ys, row_idx, max_ratio):
 # ② POLYGON TYPE DETECTION
 # ==========================================================================
 
+
 def _detect_polygon_type(poly: Polygon) -> str:
     """
     Classify *poly* into one of four axis-aligned LIR algorithm cases.
@@ -1128,9 +1173,7 @@ def _detect_polygon_type(poly: Polygon) -> str:
     """
     has_holes: bool = len(list(poly.interiors)) > 0
     is_convex: bool = (
-            abs(poly.convex_hull.area - poly.area)
-            / max(poly.area, 1e-14)
-            < 1e-6
+        abs(poly.convex_hull.area - poly.area) / max(poly.area, 1e-14) < 1e-6
     )
 
     if is_convex and not has_holes:
@@ -1147,7 +1190,10 @@ def _detect_polygon_type(poly: Polygon) -> str:
 #    Alt et al. 1994 / Amenta 1994 — O(n²) vertex-pair enumeration
 # ==========================================================================
 
-def _exact_solve_convex(poly: Polygon, max_ratio: float) -> Tuple[Optional[Polygon], float]:
+
+def _exact_solve_convex(
+    poly: Polygon, max_ratio: float
+) -> Tuple[Optional[Polygon], float]:
     """
     Exact O(n²) axis-aligned LIR solver for a convex polygon without holes.
 
@@ -1297,7 +1343,9 @@ def _exact_solve_convex(poly: Polygon, max_ratio: float) -> Tuple[Optional[Polyg
         # Reject the slab entirely if any query is None — a None extent means
         # we could not bound the polygon at that y (numerically degenerate),
         # and an unbounded query would make the intersection unsafe.
-        extents_valid = [e for e in extents if e is not None and (e[1] - e[0]) > _EXT_DEGENERATE]
+        extents_valid = [
+            e for e in extents if e is not None and (e[1] - e[0]) > _EXT_DEGENERATE
+        ]
         if not extents_valid:
             return None
         xl_v = max(e[0] for e in extents_valid)
@@ -1381,6 +1429,7 @@ def _exact_solve_convex(poly: Polygon, max_ratio: float) -> Tuple[Optional[Polyg
     # accuracy.  For unlimited aspect ratio the 1D area function is unimodal
     # in each side, so ternary search converges.
     if best_rect is not None and max_ratio <= 0.0:
+
         def _theoretical_area(y_lo_v, y_hi_v):
             """Return smooth theoretical area from tight_extent, without
             poly.covers check — needed for unimodal optimization."""
@@ -1451,16 +1500,24 @@ def _exact_solve_convex(poly: Polygon, max_ratio: float) -> Tuple[Optional[Polyg
             _b_y_hi = best_y_hi
         y_range = float(ys_all[-1] - ys_all[0])
         half = 0.5 * y_range / max(len(ys_all) - 1, 1)
-        r_hi = _ternary(True, _b_y_lo, _b_y_hi,
-                        max(_b_y_hi - 3 * half, _b_y_lo + _EXT_DEGENERATE),
-                        min(_b_y_hi + 3 * half, float(ys_all[-1])))
+        r_hi = _ternary(
+            True,
+            _b_y_lo,
+            _b_y_hi,
+            max(_b_y_hi - 3 * half, _b_y_lo + _EXT_DEGENERATE),
+            min(_b_y_hi + 3 * half, float(ys_all[-1])),
+        )
         if r_hi[1] is not None and r_hi[0] > best_area:
             best_area = r_hi[0]
             best_rect = r_hi[1]
             _b_y_hi = r_hi[2]
-        r_lo = _ternary(False, _b_y_lo, _b_y_hi,
-                        max(_b_y_lo - 3 * half, float(ys_all[0])),
-                        min(_b_y_lo + 3 * half, _b_y_hi - _EXT_DEGENERATE))
+        r_lo = _ternary(
+            False,
+            _b_y_lo,
+            _b_y_hi,
+            max(_b_y_lo - 3 * half, float(ys_all[0])),
+            min(_b_y_lo + 3 * half, _b_y_hi - _EXT_DEGENERATE),
+        )
         if r_lo[1] is not None and r_lo[0] > best_area:
             best_area = r_lo[0]
             best_rect = r_lo[1]
@@ -1473,12 +1530,13 @@ def _exact_solve_convex(poly: Polygon, max_ratio: float) -> Tuple[Optional[Polyg
 #    Daniels et al. 1997 — vertex-coordinate grid + LRH scanline — O(n²)
 # ==========================================================================
 
+
 def _uniform_grid_solve(
-        poly: Polygon,
-        n_cols: int,
-        n_rows: int,
-        max_ratio: float,
-        emitter=None,
+    poly: Polygon,
+    n_cols: int,
+    n_rows: int,
+    max_ratio: float,
+    emitter=None,
 ) -> Tuple[Optional[Polygon], float]:
     """
     Fallback uniform-grid LRH solver used when the vertex-coordinate grid
@@ -1517,9 +1575,7 @@ def _uniform_grid_solve(
         row = mask[r].astype(np.int64)
         heights += row
         heights *= row
-        x0, y0, x1, y1, area = _histogram_kernel_vp(
-            heights, xs, ys, r, max_ratio
-        )
+        x0, y0, x1, y1, area = _histogram_kernel_vp(heights, xs, ys, r, max_ratio)
         if area <= 0.0:
             continue
 
@@ -1535,15 +1591,23 @@ def _uniform_grid_solve(
                     candidates = [
                         box(x0, y0, x0 + nl, y1),
                         box(x1 - nl, y0, x1, y1),
-                        box(0.5 * (x0 + x1) - nl * 0.5, y0,
-                            0.5 * (x0 + x1) + nl * 0.5, y1),
+                        box(
+                            0.5 * (x0 + x1) - nl * 0.5,
+                            y0,
+                            0.5 * (x0 + x1) + nl * 0.5,
+                            y1,
+                        ),
                     ]
                 else:
                     candidates = [
                         box(x0, y0, x1, y0 + nl),
                         box(x0, y1 - nl, x1, y1),
-                        box(x0, 0.5 * (y0 + y1) - nl * 0.5,
-                            x1, 0.5 * (y0 + y1) + nl * 0.5),
+                        box(
+                            x0,
+                            0.5 * (y0 + y1) - nl * 0.5,
+                            x1,
+                            0.5 * (y0 + y1) + nl * 0.5,
+                        ),
                     ]
                 best_cand = None
                 best_cand_area = 0.0
@@ -1599,10 +1663,10 @@ def _uniform_grid_solve(
 
 
 def _exact_solve_vertex_grid(
-        poly: Polygon,
-        poly_type: str,
-        max_ratio: float,
-        emitter=None,
+    poly: Polygon,
+    poly_type: str,
+    max_ratio: float,
+    emitter=None,
 ) -> Tuple[Optional[Polygon], float]:
     """
     Exact O(n²) axis-aligned LIR solver via Daniels et al. (1997)
@@ -1716,7 +1780,8 @@ def _exact_solve_vertex_grid(
     # ── Emit grid_built ─────────────────────────────────────────────────────
     if emitter:
         emitter.emit(
-            phase="GRID", type_="grid_built",
+            phase="GRID",
+            type_="grid_built",
             label=f"Grid {n_cols}×{n_rows}",
             narration=(
                 "Vertex coordinates from all polygon rings are sorted and "
@@ -1735,12 +1800,17 @@ def _exact_solve_vertex_grid(
     # Cap is applied AFTER augmentation (augmented grid is at most 2x raw size).
     # Also trigger fallback if total cells too large (avoids O(v²) slowdown).
     total_cells = n_cols * n_rows
-    if n_cols > _VERTEX_COORD_CAP or n_rows > _VERTEX_COORD_CAP or total_cells > _MAX_GRID_CELLS:
+    if (
+        n_cols > _VERTEX_COORD_CAP
+        or n_rows > _VERTEX_COORD_CAP
+        or total_cells > _MAX_GRID_CELLS
+    ):
         fb_cols = min(n_cols, _UNIFORM_FALLBACK_N)
         fb_rows = min(n_rows, _UNIFORM_FALLBACK_N)
         if emitter:
             emitter.emit(
-                phase="GRID", type_="uniform_grid_built",
+                phase="GRID",
+                type_="uniform_grid_built",
                 label=f"Uniform {fb_cols}×{fb_rows} (fallback)",
                 narration="Vertex density exceeded cap; falling back to uniform grid.",
                 grid_steps=fb_cols,
@@ -1766,9 +1836,7 @@ def _exact_solve_vertex_grid(
         row = mask[r].astype(np.int64)
         heights += row
         heights *= row
-        x0, y0, x1, y1, area = _histogram_kernel_vp(
-            heights, xs_v, ys_v, r, max_ratio
-        )
+        x0, y0, x1, y1, area = _histogram_kernel_vp(heights, xs_v, ys_v, r, max_ratio)
         if area <= 0.0:
             continue
 
@@ -1789,15 +1857,23 @@ def _exact_solve_vertex_grid(
                     candidates = [
                         box(x0, y0, x0 + nl, y1),
                         box(x1 - nl, y0, x1, y1),
-                        box(0.5 * (x0 + x1) - nl * 0.5, y0,
-                            0.5 * (x0 + x1) + nl * 0.5, y1),
+                        box(
+                            0.5 * (x0 + x1) - nl * 0.5,
+                            y0,
+                            0.5 * (x0 + x1) + nl * 0.5,
+                            y1,
+                        ),
                     ]
                 else:
                     candidates = [
                         box(x0, y0, x1, y0 + nl),
                         box(x0, y1 - nl, x1, y1),
-                        box(x0, 0.5 * (y0 + y1) - nl * 0.5,
-                            x1, 0.5 * (y0 + y1) + nl * 0.5),
+                        box(
+                            x0,
+                            0.5 * (y0 + y1) - nl * 0.5,
+                            x1,
+                            0.5 * (y0 + y1) + nl * 0.5,
+                        ),
                     ]
                 best_cand = None
                 best_cand_area = 0.0
@@ -1852,16 +1928,26 @@ def _exact_solve_vertex_grid(
             is_new_best = current_best > prev_best + 1e-12
             if is_new_best:
                 emitter._seq_data["hist_best_area"] = current_best
-            rb_bounds = ([float(best_rect.bounds[0]), float(best_rect.bounds[1]),
-                          float(best_rect.bounds[2]), float(best_rect.bounds[3])]
-                         if best_rect else [0, 0, 0, 0])
-            emitter.emit("HISTOGRAM", "hist_row_best",
-                         f"Row {r} best: area={current_best:.1f}",
-                         f"Best rectangle after sweep of row {r}.",
-                         row_idx=r,
-                         rect=rb_bounds,
-                         area=round(current_best, 4),
-                         is_global_best=is_new_best)
+            rb_bounds = (
+                [
+                    float(best_rect.bounds[0]),
+                    float(best_rect.bounds[1]),
+                    float(best_rect.bounds[2]),
+                    float(best_rect.bounds[3]),
+                ]
+                if best_rect
+                else [0, 0, 0, 0]
+            )
+            emitter.emit(
+                "HISTOGRAM",
+                "hist_row_best",
+                f"Row {r} best: area={current_best:.1f}",
+                f"Best rectangle after sweep of row {r}.",
+                row_idx=r,
+                rect=rb_bounds,
+                area=round(current_best, 4),
+                is_global_best=is_new_best,
+            )
 
     # Merge: prefer the exact (unclipped) rect; fall back to the best clipped one.
     if best_rect is None and fallback_rect is not None:
@@ -1875,13 +1961,14 @@ def _exact_solve_vertex_grid(
 # ⑤ EPSILON-INSET CONTAINMENT CERTIFICATION
 # ==========================================================================
 
+
 def _certify_rect(
-        poly: Polygon,
-        rect: Optional[Polygon],
-        max_ratio: float,
-        buf_enabled: bool,
-        buf_value: float,
-        prepared_poly=None,
+    poly: Polygon,
+    rect: Optional[Polygon],
+    max_ratio: float,
+    buf_enabled: bool,
+    buf_value: float,
+    prepared_poly=None,
 ) -> Tuple[Optional[Polygon], float]:
     if rect is None or rect.is_empty:
         return None, 0.0
@@ -1937,10 +2024,10 @@ _REFINE_ITERATIONS = 2  # 1 pass corrects diagonal gaps; 2nd catches coupled sid
 
 
 def _refine_rect_to_boundary(
-        poly: Polygon,
-        rect: Optional[Polygon],
-        max_ratio: float,
-        prepared_poly=None,
+    poly: Polygon,
+    rect: Optional[Polygon],
+    max_ratio: float,
+    prepared_poly=None,
 ) -> Tuple[Optional[Polygon], float]:
     """
     Push each side of *rect* outward to the true polygon boundary via binary
@@ -2061,11 +2148,12 @@ def _refine_rect_to_boundary(
 # ⑥ BEST-EFFORT SHRINK FALLBACK  (for always_return path)
 # ==========================================================================
 
+
 def _best_effort_shrink_to_cover(
-        poly: Polygon,
-        rect: Optional[Polygon],
-        max_ratio: float,
-        prepared_poly=None,
+    poly: Polygon,
+    rect: Optional[Polygon],
+    max_ratio: float,
+    prepared_poly=None,
 ) -> Tuple[Optional[Polygon], float]:
     """
     Binary-search for the largest uniform scale factor s ∈ (0, 1] such that
@@ -2109,6 +2197,7 @@ def _best_effort_shrink_to_cover(
         if s <= 0.0:
             return None
         from shapely.affinity import scale as shp_scale
+
         try:
             scaled = shp_scale(rect, xfact=s, yfact=s, origin=centroid_r)
             if scaled is None or scaled.is_empty or scaled.area <= 0.0:
@@ -2153,6 +2242,7 @@ def _best_effort_shrink_to_cover(
 # ⑦ GEOMETRY PREPARATION
 # ==========================================================================
 
+
 def _prepare_polygon(geom) -> Optional[Polygon]:
     """
     Validate and normalise an arbitrary Shapely geometry to a single Polygon.
@@ -2179,14 +2269,20 @@ def _prepare_polygon(geom) -> Optional[Polygon]:
         geom = make_valid(geom)
 
     if isinstance(geom, MultiPolygon):
-        polys = [g for g in geom.geoms
-                 if isinstance(g, Polygon) and not g.is_empty and g.area > 0]
+        polys = [
+            g
+            for g in geom.geoms
+            if isinstance(g, Polygon) and not g.is_empty and g.area > 0
+        ]
         if not polys:
             return None
         geom = max(polys, key=lambda g: g.area)
     elif hasattr(geom, "geoms") and not isinstance(geom, Polygon):
-        polys = [g for g in geom.geoms
-                 if isinstance(g, Polygon) and not g.is_empty and g.area > 0]
+        polys = [
+            g
+            for g in geom.geoms
+            if isinstance(g, Polygon) and not g.is_empty and g.area > 0
+        ]
         if not polys:
             return None
         geom = max(polys, key=lambda g: g.area)
@@ -2200,15 +2296,16 @@ def _prepare_polygon(geom) -> Optional[Polygon]:
 # ⑧ MAIN AXIS-ALIGNED LIR SOLVER
 # ==========================================================================
 
+
 def _solve_axis_aligned_lir(
-        poly: Polygon,
-        axis_angle: float,
-        grid_fine: int,
-        max_ratio: float,
-        always_return: bool,
-        buf_enabled: bool,
-        buf_value: float,
-        emitter=None,
+    poly: Polygon,
+    axis_angle: float,
+    grid_fine: int,
+    max_ratio: float,
+    always_return: bool,
+    buf_enabled: bool,
+    buf_value: float,
+    emitter=None,
 ) -> Tuple[Optional[Polygon], float, float, str, float, bool]:
     """
     Solve for the largest inscribed rectangle that is axis-aligned in the
@@ -2273,15 +2370,22 @@ def _solve_axis_aligned_lir(
 
     if emitter:
         ext_coords = [[float(x), float(y)] for x, y in poly.exterior.coords[:-1]]
-        hole_coords = [[[float(x), float(y)] for x, y in r.coords[:-1]] for r in poly.interiors]
+        hole_coords = [
+            [[float(x), float(y)] for x, y in r.coords[:-1]] for r in poly.interiors
+        ]
         emitter.emit(
-            phase="SETUP", type_="polygon_loaded",
+            phase="SETUP",
+            type_="polygon_loaded",
             label=f"Polygon loaded ({poly_type})",
             narration="Polygon geometry loaded and validated for axis-aligned LIR solve.",
             exterior=ext_coords,
             holes=hole_coords,
-            bbox=[float(poly.bounds[0]), float(poly.bounds[1]),
-                  float(poly.bounds[2]), float(poly.bounds[3])],
+            bbox=[
+                float(poly.bounds[0]),
+                float(poly.bounds[1]),
+                float(poly.bounds[2]),
+                float(poly.bounds[3]),
+            ],
             area=float(poly.area),
             vertex_count=len(poly.exterior.coords) - 1,
             poly_type=poly_type,
@@ -2296,9 +2400,12 @@ def _solve_axis_aligned_lir(
     # ── Emit rotation_applied event ──────────────────────────────────────────
     if emitter and abs(axis_angle) > 1e-9:
         ext_rot = [[float(x), float(y)] for x, y in rot_poly.exterior.coords[:-1]]
-        hole_rot = [[[float(x), float(y)] for x, y in r.coords[:-1]] for r in rot_poly.interiors]
+        hole_rot = [
+            [[float(x), float(y)] for x, y in r.coords[:-1]] for r in rot_poly.interiors
+        ]
         emitter.emit(
-            phase="SETUP", type_="rotation_applied",
+            phase="SETUP",
+            type_="rotation_applied",
             label=f"Rotated {axis_angle:.1f}°",
             narration=f"Polygon rotated by {axis_angle}° for axis-aligned solve.",
             angle_deg=float(axis_angle),
@@ -2374,7 +2481,8 @@ def _solve_axis_aligned_lir(
     # ── Emit rotation_removed event ──────────────────────────────────────────
     if emitter and abs(axis_angle) > 1e-9:
         emitter.emit(
-            phase="SETUP", type_="rotation_removed",
+            phase="SETUP",
+            type_="rotation_removed",
             label="Rotation removed",
             narration="Coordinate system restored to world-space.",
             angle_deg=float(axis_angle),
@@ -2387,11 +2495,16 @@ def _solve_axis_aligned_lir(
         poly_area_val = float(poly.area)
         pct = (best_area / poly_area_val * 100) if poly_area_val > 0 else 0.0
         emitter.emit(
-            phase="RESULT", type_="best_updated",
+            phase="RESULT",
+            type_="best_updated",
             label=f"Best: area={best_area:.1f} ({pct:.1f}%)",
             narration="New best inscribed rectangle found.",
-            rect=[float(rect_bounds[0]), float(rect_bounds[1]),
-                  float(rect_bounds[2]), float(rect_bounds[3])],
+            rect=[
+                float(rect_bounds[0]),
+                float(rect_bounds[1]),
+                float(rect_bounds[2]),
+                float(rect_bounds[3]),
+            ],
             area=round(best_area, 4),
             pct_polygon=round(pct, 2),
             angle_deg=float(axis_angle),
@@ -2410,13 +2523,16 @@ def _solve_axis_aligned_lir(
     # ── Emit cert_started ────────────────────────────────────────────────────
     if emitter and best_rect_world is not None:
         emitter.emit(
-            phase="CERT", type_="cert_started",
+            phase="CERT",
+            type_="cert_started",
             label="Certification started",
             narration="Verifying rectangle is fully inside the polygon.",
-            rect=[float(best_rect_world.bounds[0]),
-                  float(best_rect_world.bounds[1]),
-                  float(best_rect_world.bounds[2]),
-                  float(best_rect_world.bounds[3])],
+            rect=[
+                float(best_rect_world.bounds[0]),
+                float(best_rect_world.bounds[1]),
+                float(best_rect_world.bounds[2]),
+                float(best_rect_world.bounds[3]),
+            ],
             area=round(best_area, 4),
             method="covers",
         )
@@ -2431,11 +2547,16 @@ def _solve_axis_aligned_lir(
         if emitter:
             final_bounds = final_rect.bounds
             emitter.emit(
-                phase="CERT", type_="cert_passed",
+                phase="CERT",
+                type_="cert_passed",
                 label="Certification passed",
                 narration="Rectangle confirmed fully inside the polygon.",
-                rect=[float(final_bounds[0]), float(final_bounds[1]),
-                      float(final_bounds[2]), float(final_bounds[3])],
+                rect=[
+                    float(final_bounds[0]),
+                    float(final_bounds[1]),
+                    float(final_bounds[2]),
+                    float(final_bounds[3]),
+                ],
                 area=round(final_area, 4),
                 inset=round(CERT_EPS, 6) if final_area < best_area else 0.0,
             )
@@ -2443,19 +2564,23 @@ def _solve_axis_aligned_lir(
         # ── Emit cert_failed_shrink / cert_fallback ──────────────────────────
         if emitter:
             emitter.emit(
-                phase="CERT", type_="cert_failed_shrink",
+                phase="CERT",
+                type_="cert_failed_shrink",
                 label="Cert failed, shrinking",
                 narration="Certification failed; attempting shrink fallback.",
                 attempt=1,
-                rect_before=[float(best_rect_world.bounds[0]),
-                             float(best_rect_world.bounds[1]),
-                             float(best_rect_world.bounds[2]),
-                             float(best_rect_world.bounds[3])],
+                rect_before=[
+                    float(best_rect_world.bounds[0]),
+                    float(best_rect_world.bounds[1]),
+                    float(best_rect_world.bounds[2]),
+                    float(best_rect_world.bounds[3]),
+                ],
                 rect_after=[0, 0, 0, 0],
                 eps=CERT_EPS,
             )
             emitter.emit(
-                phase="CERT", type_="cert_fallback",
+                phase="CERT",
+                type_="cert_fallback",
                 label="Fallback invoked",
                 narration="Conservative inner fallback triggered.",
                 reason="shrink_exhausted",
@@ -2484,16 +2609,24 @@ def _solve_axis_aligned_lir(
     )
     ratio = max(w, h) / min(w, h) if min(w, h) > 0.0 else 1.0
 
-    return final_rect, float(final_area), float(axis_angle), poly_type, ratio, used_best_effort
+    return (
+        final_rect,
+        float(final_area),
+        float(axis_angle),
+        poly_type,
+        ratio,
+        used_best_effort,
+    )
 
 
 # ==========================================================================
 # ⑨ PUBLIC WORKER ENTRY POINT
 # ==========================================================================
 
+
 def _worker_process_feature(
-        args: tuple,
-        emitter=None,
+    args: tuple,
+    emitter=None,
 ) -> Optional[tuple]:
     """
     Stateless worker — safe for ``concurrent.futures.ThreadPoolExecutor``
@@ -2528,8 +2661,16 @@ def _worker_process_feature(
         Re-raised with feature context if an unexpected exception occurs
         during processing.
     """
-    (feat_id, wkb_bytes, axis_angle, grid_fine, max_ratio,
-     buf_enabled, buf_value, always_return) = args
+    (
+        feat_id,
+        wkb_bytes,
+        axis_angle,
+        grid_fine,
+        max_ratio,
+        buf_enabled,
+        buf_value,
+        always_return,
+    ) = args
 
     try:
         # Parse WKB → validated Shapely polygon
@@ -2562,11 +2703,16 @@ def _worker_process_feature(
             pct = (area / poly_area * 100) if poly_area > 0 else 0.0
             rect_bounds = rect.bounds
             emitter.emit(
-                phase="RESULT", type_="final_result",
+                phase="RESULT",
+                type_="final_result",
                 label=f"Final: area={area:.1f} ({pct:.1f}%)",
                 narration="Axis-aligned LIR solve complete.",
-                rect=[float(rect_bounds[0]), float(rect_bounds[1]),
-                      float(rect_bounds[2]), float(rect_bounds[3])],
+                rect=[
+                    float(rect_bounds[0]),
+                    float(rect_bounds[1]),
+                    float(rect_bounds[2]),
+                    float(rect_bounds[3]),
+                ],
                 area=round(float(area), 4),
                 pct_polygon=round(pct, 2),
                 angle_deg=round(float(ang), 4),
@@ -2594,6 +2740,7 @@ def _worker_process_feature(
 # ==========================================================================
 # ⑩ TEST CASES  (not called in production)
 # ==========================================================================
+
 
 def _test_cases() -> dict:
     """
@@ -2649,9 +2796,7 @@ def _test_cases() -> dict:
 
     # Case 3: Concave, no holes — L-shape
     # Exact solver: _exact_solve_vertex_grid; LIR fits in the 10×5 lower bar
-    concave_no_holes = Polygon(
-        [(0, 0), (10, 0), (10, 5), (5, 5), (5, 10), (0, 10)]
-    )
+    concave_no_holes = Polygon([(0, 0), (10, 0), (10, 5), (5, 5), (5, 10), (0, 10)])
 
     # Case 4: Concave with holes — L-shape with rectangular punch-out
     # Exact solver: _exact_solve_vertex_grid; hole vertex coords included in grid

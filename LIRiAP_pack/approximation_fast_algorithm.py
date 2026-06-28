@@ -96,44 +96,94 @@ class InscribedRectangleApproximationFast(QgsProcessingAlgorithm):
     AUTO_INSTALL_NUMBA = "AUTO_INSTALL_NUMBA"
 
     def initAlgorithm(self, config=None):
-        self.addParameter(QgsProcessingParameterVectorLayer(
-            self.INPUT, "Input layer (polygons)", [QgsProcessing.TypeVectorPolygon]
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.ANGLE_STEP, "Fallback angle step [deg]",
-            QgsProcessingParameterNumber.Integer, defaultValue=5, minValue=1, maxValue=45
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.GRID_STEPS_COARSE, "Coarse grid resolution",
-            QgsProcessingParameterNumber.Integer, defaultValue=40, minValue=10, maxValue=300
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.GRID_STEPS_FINE, "Fine grid resolution",
-            QgsProcessingParameterNumber.Integer, defaultValue=100, minValue=20, maxValue=500
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.MAX_RATIO, "Max aspect ratio long:short (0=unlimited)",
-            QgsProcessingParameterNumber.Double, defaultValue=1.6, minValue=0.0, maxValue=20.0
-        ))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.REFINE_BUFFER, "Enable containment refinement buffer", defaultValue=False
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.REFINE_BUFFER_VALUE, "Buffer distance in CRS units",
-            QgsProcessingParameterNumber.Double, defaultValue=-0.5,
-            minValue=-1e9, maxValue=1e9, optional=True
-        ))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.USE_CHUNKING, "Enable chunking (parallel mode)", defaultValue=False
-        ))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.AUTO_INSTALL_NUMBA, "Attempt safe numba auto-install if missing", defaultValue=False
-        ))
-        self.addParameter(QgsProcessingParameterNumber(
-            self.N_WORKERS, "Workers (0 = auto, 1 = serial, >1 = custom)",
-            QgsProcessingParameterNumber.Integer, defaultValue=1, minValue=0, maxValue=128
-        ))
-        self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "Inscribed rectangles"))
+        self.addParameter(
+            QgsProcessingParameterVectorLayer(
+                self.INPUT, "Input layer (polygons)", [QgsProcessing.TypeVectorPolygon]
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.ANGLE_STEP,
+                "Fallback angle step [deg]",
+                QgsProcessingParameterNumber.Integer,
+                defaultValue=5,
+                minValue=1,
+                maxValue=45,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.GRID_STEPS_COARSE,
+                "Coarse grid resolution",
+                QgsProcessingParameterNumber.Integer,
+                defaultValue=40,
+                minValue=10,
+                maxValue=300,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.GRID_STEPS_FINE,
+                "Fine grid resolution",
+                QgsProcessingParameterNumber.Integer,
+                defaultValue=100,
+                minValue=20,
+                maxValue=500,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.MAX_RATIO,
+                "Max aspect ratio long:short (0=unlimited)",
+                QgsProcessingParameterNumber.Double,
+                defaultValue=1.6,
+                minValue=0.0,
+                maxValue=20.0,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.REFINE_BUFFER,
+                "Enable containment refinement buffer",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.REFINE_BUFFER_VALUE,
+                "Buffer distance in CRS units",
+                QgsProcessingParameterNumber.Double,
+                defaultValue=-0.5,
+                minValue=-1e9,
+                maxValue=1e9,
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.USE_CHUNKING, "Enable chunking (parallel mode)", defaultValue=False
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.AUTO_INSTALL_NUMBA,
+                "Attempt safe numba auto-install if missing",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.N_WORKERS,
+                "Workers (0 = auto, 1 = serial, >1 = custom)",
+                QgsProcessingParameterNumber.Integer,
+                defaultValue=1,
+                minValue=0,
+                maxValue=128,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(self.OUTPUT, "Inscribed rectangles")
+        )
 
     def processAlgorithm(self, parameters, context, feedback):
         # 1) Read user parameters and optional runtime bootstrap flags.
@@ -143,9 +193,13 @@ class InscribedRectangleApproximationFast(QgsProcessingAlgorithm):
         grid_fine = self.parameterAsInt(parameters, self.GRID_STEPS_FINE, context)
         max_ratio = self.parameterAsDouble(parameters, self.MAX_RATIO, context)
         buf_enabled = self.parameterAsBoolean(parameters, self.REFINE_BUFFER, context)
-        buf_value = self.parameterAsDouble(parameters, self.REFINE_BUFFER_VALUE, context)
+        buf_value = self.parameterAsDouble(
+            parameters, self.REFINE_BUFFER_VALUE, context
+        )
         use_chunking = self.parameterAsBoolean(parameters, self.USE_CHUNKING, context)
-        auto_install_numba = self.parameterAsBoolean(parameters, self.AUTO_INSTALL_NUMBA, context)
+        auto_install_numba = self.parameterAsBoolean(
+            parameters, self.AUTO_INSTALL_NUMBA, context
+        )
         n_workers_param = self.parameterAsInt(parameters, self.N_WORKERS, context)
         _, installed_now = ensure_numba(feedback, auto_install_numba)
         if installed_now:
@@ -184,7 +238,14 @@ class InscribedRectangleApproximationFast(QgsProcessingAlgorithm):
         n_workers = n_workers_param if n_workers_param > 0 else cpu
         n_workers = max(1, min(n_workers, total))
         use_parallel = n_workers > 1 and total > 4
-        shared_params = (angle_step, grid_coarse, grid_fine, max_ratio, buf_enabled, buf_value)
+        shared_params = (
+            angle_step,
+            grid_coarse,
+            grid_fine,
+            max_ratio,
+            buf_enabled,
+            buf_value,
+        )
 
         # 5) Execute serially, chunked-parallel, or per-feature parallel.
         results = {}
@@ -272,4 +333,6 @@ class InscribedRectangleApproximationFast(QgsProcessingAlgorithm):
         return QCoreApplication.translate("Processing", s)
 
     def shortHelpString(self):
-        return build_short_help("Approximation Fast", "approximation_fast", _NUMBA_AVAILABLE)
+        return build_short_help(
+            "Approximation Fast", "approximation_fast", _NUMBA_AVAILABLE
+        )

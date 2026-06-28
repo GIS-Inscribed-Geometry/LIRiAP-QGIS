@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 from shapely.geometry import Polygon
@@ -39,75 +39,77 @@ from shapely.prepared import prep as _shp_prep
 
 try:
     import shapely as _shp2
+
     _SHP2 = hasattr(_shp2, "distance") and hasattr(_shp2, "contains")
 except ImportError:
     _SHP2 = False
 
 try:
     from scipy.optimize import minimize as _slsqp_min
+
     _SCIPY = True
 except ImportError:
     _slsqp_min = None
     _SCIPY = False
 
 # ── Tuning ──────────────────────────────────────────────────────────────────
-_EPS          = 1e-7    # SDF margin: corners must satisfy sdf ≤ +ε
-_ANGLE_WIN    = 5.0     # ±degrees searched around the BCRS seed angle
-_MAXITER_1    = 50      # SLSQP max iterations, pass 1 (fast)
-_MAXITER_2    = 30      # SLSQP max iterations, pass 2 (tighter)
-_FTOL_1       = 1e-8    # SLSQP ftol pass 1  — converges in ≈13 iters
-_FTOL_2       = 1e-11   # SLSQP ftol pass 2
-_MIN_IMPROVE  = 1e-5    # Minimum area gain to accept SDF result
-_MIN_HW       = 1e-10   # Minimum valid half-width / half-height
-_TIMEOUT_MS   = 180.0   # Hard wall-clock budget per polygon (ms)
+_EPS = 1e-7  # SDF margin: corners must satisfy sdf ≤ +ε
+_ANGLE_WIN = 5.0  # ±degrees searched around the BCRS seed angle
+_MAXITER_1 = 50  # SLSQP max iterations, pass 1 (fast)
+_MAXITER_2 = 30  # SLSQP max iterations, pass 2 (tighter)
+_FTOL_1 = 1e-8  # SLSQP ftol pass 1  — converges in ≈13 iters
+_FTOL_2 = 1e-11  # SLSQP ftol pass 2
+_MIN_IMPROVE = 1e-5  # Minimum area gain to accept SDF result
+_MIN_HW = 1e-10  # Minimum valid half-width / half-height
+_TIMEOUT_MS = 180.0  # Hard wall-clock budget per polygon (ms)
 
 
 # ===========================================================================
 # ① SDF PRIMITIVES
 # ===========================================================================
 
+
 def polygon_sdf(poly: Polygon, x: float, y: float) -> float:
     """Exact signed distance: negative inside, positive outside/in-hole."""
     from shapely.geometry import Point
+
     pt = Point(x, y)
-    d_poly = poly.distance(pt)          # 0 when inside, >0 outside
+    d_poly = poly.distance(pt)  # 0 when inside, >0 outside
     if d_poly > 0.0:
-        return d_poly                    # outside outer ring
+        return d_poly  # outside outer ring
 
     d_ext = poly.exterior.distance(pt)
-    if poly.contains(pt):               # valid interior
+    if poly.contains(pt):  # valid interior
         min_d = d_ext
         for ring in poly.interiors:
             d_h = ring.distance(pt)
             if d_h < min_d:
                 min_d = d_h
-        return -min_d                    # negative = inside
+        return -min_d  # negative = inside
 
     if d_ext < 1e-12:
-        return 0.0                       # on outer boundary
+        return 0.0  # on outer boundary
 
-    for ring in poly.interiors:          # inside a hole
+    for ring in poly.interiors:  # inside a hole
         hp = Polygon(ring)
         if hp.contains(pt):
-            return hp.exterior.distance(pt)   # positive = infeasible
+            return hp.exterior.distance(pt)  # positive = infeasible
     return 0.0
 
 
-def polygon_sdf_batch(poly: Polygon,
-                      xs: np.ndarray,
-                      ys: np.ndarray) -> np.ndarray:
+def polygon_sdf_batch(poly: Polygon, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
     """Vectorised SDF using Shapely 2.x ufuncs; scalar fallback otherwise."""
     xs = np.asarray(xs, dtype=np.float64)
     ys = np.asarray(ys, dtype=np.float64)
 
     if _SHP2:
         try:
-            pts    = _shp2.points(xs, ys)
+            pts = _shp2.points(xs, ys)
             inside = _shp2.contains(poly, pts)
-            d_out  = _shp2.distance(poly, pts)     # 0 if inside
+            d_out = _shp2.distance(poly, pts)  # 0 if inside
 
-            d_ext  = _shp2.distance(poly.exterior, pts)
-            min_d  = d_ext.copy()
+            d_ext = _shp2.distance(poly.exterior, pts)
+            min_d = d_ext.copy()
             for ring in poly.interiors:
                 np.minimum(min_d, _shp2.distance(ring, pts), out=min_d)
 
@@ -120,7 +122,7 @@ def polygon_sdf_batch(poly: Polygon,
                     hi = _shp2.contains(hp, pts[idx])
                     if hi.any():
                         d_hr = _shp2.distance(ring, pts[idx])
-                        tmp  = d_out[idx]
+                        tmp = d_out[idx]
                         tmp[hi] = d_hr[hi]
                         d_out[idx] = tmp
 
@@ -128,26 +130,31 @@ def polygon_sdf_batch(poly: Polygon,
         except Exception:
             pass
 
-    return np.array([polygon_sdf(poly, float(x), float(y))
-                     for x, y in zip(xs, ys)])
+    return np.array([polygon_sdf(poly, float(x), float(y)) for x, y in zip(xs, ys)])
 
 
 # ===========================================================================
 # ② RECTANGLE GEOMETRY
 # ===========================================================================
 
-def rect_corners(cx: float, cy: float,
-                 hw: float, hh: float,
-                 theta_rad: float) -> np.ndarray:
+
+def rect_corners(
+    cx: float, cy: float, hw: float, hh: float, theta_rad: float
+) -> np.ndarray:
     """4 corners of an oriented rectangle.  Shape (4, 2)."""
-    cos_t = math.cos(theta_rad);  sin_t = math.sin(theta_rad)
-    u = np.array([ cos_t, sin_t])
+    cos_t = math.cos(theta_rad)
+    sin_t = math.sin(theta_rad)
+    u = np.array([cos_t, sin_t])
     v = np.array([-sin_t, cos_t])
     c = np.array([cx, cy])
-    return np.array([c + hw*u + hh*v,
-                     c - hw*u + hh*v,
-                     c - hw*u - hh*v,
-                     c + hw*u - hh*v])
+    return np.array(
+        [
+            c + hw * u + hh * v,
+            c - hw * u + hh * v,
+            c - hw * u - hh * v,
+            c + hw * u - hh * v,
+        ]
+    )
 
 
 def _apply_ratio(hw: float, hh: float, max_ratio: float) -> Tuple[float, float]:
@@ -168,16 +175,18 @@ def _corners_sdf(poly: Polygon, c: np.ndarray) -> np.ndarray:
 # ③ CORE 5-D SLSQP SOLVER
 # ===========================================================================
 
-def _solve_5d(poly:        Polygon,
-              cx0:         float,
-              cy0:         float,
-              hw0:         float,
-              hh0:         float,
-              theta0_deg:  float,
-              max_ratio:   float = 0.0,
-              angle_win:   float = _ANGLE_WIN,
-              timeout_ms:  float = _TIMEOUT_MS,
-              ) -> Tuple[Optional[Polygon], float, float]:
+
+def _solve_5d(
+    poly: Polygon,
+    cx0: float,
+    cy0: float,
+    hw0: float,
+    hh0: float,
+    theta0_deg: float,
+    max_ratio: float = 0.0,
+    angle_win: float = _ANGLE_WIN,
+    timeout_ms: float = _TIMEOUT_MS,
+) -> Tuple[Optional[Polygon], float, float]:
     """
     Joint (cx, cy, hw, hh, θ) SLSQP optimizer.
 
@@ -188,10 +197,10 @@ def _solve_5d(poly:        Polygon,
         return None, 0.0, theta0_deg
 
     theta0 = math.radians(theta0_deg)
-    t_lo   = math.radians(theta0_deg - angle_win)
-    t_hi   = math.radians(theta0_deg + angle_win)
+    t_lo = math.radians(theta0_deg - angle_win)
+    t_hi = math.radians(theta0_deg + angle_win)
     minx, miny, maxx, maxy = poly.bounds
-    area0  = 4.0 * hw0 * hh0
+    area0 = 4.0 * hw0 * hh0
 
     # Validate seed
     c_seed = rect_corners(cx0, cy0, hw0, hh0, theta0)
@@ -209,25 +218,33 @@ def _solve_5d(poly:        Polygon,
         c = rect_corners(cx, cy, hw, hh, theta)
         return -polygon_sdf_batch(poly, c[:, 0], c[:, 1]) - _EPS  # must be ≥ 0
 
-    bnds = [(minx, maxx), (miny, maxy),
-            (_MIN_HW, 0.5 * (maxx - minx)),
-            (_MIN_HW, 0.5 * (maxy - miny)),
-            (t_lo, t_hi)]
-    con_dict = {'type': 'ineq', 'fun': cons}
+    bnds = [
+        (minx, maxx),
+        (miny, maxy),
+        (_MIN_HW, 0.5 * (maxx - minx)),
+        (_MIN_HW, 0.5 * (maxy - miny)),
+        (t_lo, t_hi),
+    ]
+    con_dict = {"type": "ineq", "fun": cons}
     x0 = np.array([cx0, cy0, hw0, hh0, theta0])
 
-    t_start    = time.monotonic()
-    best_x     = x0.copy()
-    best_area  = area0
+    t_start = time.monotonic()
+    best_x = x0.copy()
+    best_area = area0
 
     def _try(x_init, maxiter, ftol):
         nonlocal best_x, best_area
         if (time.monotonic() - t_start) * 1e3 > timeout_ms:
             return
         try:
-            res = _slsqp_min(neg_area, x_init, method='SLSQP',
-                             bounds=bnds, constraints=con_dict,
-                             options={'maxiter': maxiter, 'ftol': ftol})
+            res = _slsqp_min(
+                neg_area,
+                x_init,
+                method="SLSQP",
+                bounds=bnds,
+                constraints=con_dict,
+                options={"maxiter": maxiter, "ftol": ftol},
+            )
             cx, cy, hw, hh, theta = res.x
             hw, hh = _apply_ratio(abs(hw), abs(hh), max_ratio)
             if hw < _MIN_HW or hh < _MIN_HW:
@@ -237,7 +254,7 @@ def _solve_5d(poly:        Polygon,
                 a = 4.0 * hw * hh
                 if a > best_area:
                     best_area = a
-                    best_x    = np.array([cx, cy, hw, hh, theta])
+                    best_x = np.array([cx, cy, hw, hh, theta])
         except Exception:
             pass
 
@@ -251,9 +268,9 @@ def _solve_5d(poly:        Polygon,
         return None, 0.0, theta0_deg
 
     cx, cy, hw, hh, theta = best_x
-    hw, hh  = _apply_ratio(abs(hw), abs(hh), max_ratio)
-    theta   = float(np.clip(theta, t_lo, t_hi))
-    c_r     = rect_corners(cx, cy, hw, hh, theta)
+    hw, hh = _apply_ratio(abs(hw), abs(hh), max_ratio)
+    theta = float(np.clip(theta, t_lo, t_hi))
+    c_r = rect_corners(cx, cy, hw, hh, theta)
 
     try:
         result = Polygon(list(map(tuple, c_r)) + [tuple(c_r[0])])
@@ -264,8 +281,9 @@ def _solve_5d(poly:        Polygon,
     return None, 0.0, theta0_deg
 
 
-def _params_from_rect(rect: Polygon, hint_angle_deg: float
-                      ) -> Tuple[float, float, float, float, float]:
+def _params_from_rect(
+    rect: Polygon, hint_angle_deg: float
+) -> Tuple[float, float, float, float, float]:
     """Extract (cx, cy, hw, hh, theta_deg) from a known-oriented rectangle."""
     cx = float(rect.centroid.x)
     cy = float(rect.centroid.y)
@@ -273,7 +291,8 @@ def _params_from_rect(rect: Polygon, hint_angle_deg: float
     if len(coords) < 5:
         return cx, cy, 1e-6, 1e-6, hint_angle_deg
 
-    p0 = np.array(coords[0][:2]);  p1 = np.array(coords[1][:2])
+    p0 = np.array(coords[0][:2])
+    p1 = np.array(coords[1][:2])
     p2 = np.array(coords[2][:2])
     l0 = float(np.linalg.norm(p1 - p0))
     l1 = float(np.linalg.norm(p2 - p1))
@@ -287,11 +306,13 @@ def _params_from_rect(rect: Polygon, hint_angle_deg: float
 #    Used when BCRS fell back to the coarse uniform grid (>300 unique coords)
 # ===========================================================================
 
-def sdf_solve_smooth(poly:       Polygon,
-                     max_ratio:  float = 0.0,
-                     n_seeds:    int   = 9,
-                     timeout_ms: float = _TIMEOUT_MS,
-                     ) -> Tuple[Optional[Polygon], float, float]:
+
+def sdf_solve_smooth(
+    poly: Polygon,
+    max_ratio: float = 0.0,
+    n_seeds: int = 9,
+    timeout_ms: float = _TIMEOUT_MS,
+) -> Tuple[Optional[Polygon], float, float]:
     """
     Multi-seed direct SDF solver for smooth/dense-vertex polygons.
 
@@ -307,36 +328,48 @@ def sdf_solve_smooth(poly:       Polygon,
 
     t0 = time.monotonic()
     minx, miny, maxx, maxy = poly.bounds
-    cx0 = 0.5 * (minx + maxx);  cy0 = 0.5 * (miny + maxy)
-    hw0 = 0.25 * (maxx - minx);  hh0 = 0.25 * (maxy - miny)
+    cx0 = 0.5 * (minx + maxx)
+    cy0 = 0.5 * (miny + maxy)
+    hw0 = 0.25 * (maxx - minx)
+    hh0 = 0.25 * (maxy - miny)
 
     # Shrink seed until corners are valid
     for _ in range(12):
         c_s = rect_corners(cx0, cy0, hw0, hh0, 0.0)
         if np.all(_corners_sdf(poly, c_s) <= _EPS * 10):
             break
-        hw0 *= 0.75;  hh0 *= 0.75
+        hw0 *= 0.75
+        hh0 *= 0.75
 
-    best_rect  = None
-    best_area  = 0.0
-    best_ang   = 0.0
-    per_seed   = timeout_ms / max(n_seeds, 1)
+    best_rect = None
+    best_area = 0.0
+    best_ang = 0.0
+    per_seed = timeout_ms / max(n_seeds, 1)
 
     for k in range(n_seeds):
         elapsed = (time.monotonic() - t0) * 1e3
         if elapsed > timeout_ms:
             break
         ang_d = k * 90.0 / n_seeds
-        slot  = min(per_seed, timeout_ms - elapsed)
+        slot = min(per_seed, timeout_ms - elapsed)
         if slot < 8:
             break
 
-        r, a, ang = _solve_5d(poly, cx0, cy0, hw0, hh0, ang_d,
-                               max_ratio=max_ratio,
-                               angle_win=90.0 / n_seeds / 2.0,
-                               timeout_ms=slot)
+        r, a, ang = _solve_5d(
+            poly,
+            cx0,
+            cy0,
+            hw0,
+            hh0,
+            ang_d,
+            max_ratio=max_ratio,
+            angle_win=90.0 / n_seeds / 2.0,
+            timeout_ms=slot,
+        )
         if r is not None and a > best_area + _MIN_IMPROVE:
-            best_rect = r;  best_area = a;  best_ang = ang
+            best_rect = r
+            best_area = a
+            best_ang = ang
 
     return best_rect, best_area, best_ang
 
@@ -345,12 +378,13 @@ def sdf_solve_smooth(poly:       Polygon,
 # ⑤ MAIN ENTRY POINT
 # ===========================================================================
 
+
 def sdf_polish(
     poly,
     candidates,
-    max_ratio      = 0.0,
-    timeout_ms     = 120.0,   # ← worker uses 'timeout_ms', sdf_refine uses 'timeout_ms_total'
-    is_smooth_poly = False,
+    max_ratio=0.0,
+    timeout_ms=120.0,  # ← worker uses 'timeout_ms', sdf_refine uses 'timeout_ms_total'
+    is_smooth_poly=False,
 ):
     """
     Thin adapter so bcrs_worker Stage 8 can call::
@@ -370,18 +404,18 @@ def sdf_polish(
     return sdf_refine(
         poly,
         candidates,
-        max_ratio        = max_ratio,
-        timeout_ms_total = timeout_ms,   # ← fix the kwarg rename here
-        is_smooth_poly   = is_smooth_poly,
+        max_ratio=max_ratio,
+        timeout_ms_total=timeout_ms,  # ← fix the kwarg rename here
+        is_smooth_poly=is_smooth_poly,
     )
 
 
 def sdf_refine(
     poly,
     candidates,
-    max_ratio         = 0.0,
-    timeout_ms_total  = 120.0,
-    is_smooth_poly    = False,
+    max_ratio=0.0,
+    timeout_ms_total=120.0,
+    is_smooth_poly=False,
 ):
     """
     Iterate over BCRS candidates and refine each using SDF 5-parameter
@@ -414,14 +448,17 @@ def sdf_refine(
         return None, 0.0, 0.0
     if not _SCIPY:
         prep_poly = _shp_prep(poly)
-        valid = [c for c in candidates
-                 if c.get('rect') is not None
-                 and not c.get('rect').is_empty
-                 and prep_poly.covers(c['rect'])]
+        valid = [
+            c
+            for c in candidates
+            if c.get("rect") is not None
+            and not c.get("rect").is_empty
+            and prep_poly.covers(c["rect"])
+        ]
         if not valid:
             return None, 0.0, 0.0
-        best = max(valid, key=lambda c: c.get('area', 0.0))
-        return best['rect'], best.get('area', 0.0), best.get('angle', 0.0)
+        best = max(valid, key=lambda c: c.get("area", 0.0))
+        return best["rect"], best.get("area", 0.0), best.get("angle", 0.0)
 
     t0 = time.monotonic()
 
@@ -431,12 +468,14 @@ def sdf_refine(
     prep_poly = _shp_prep(poly)
     best_orig = None
     for c in candidates:
-        r = c.get('rect')
+        r = c.get("rect")
         if r is not None and not r.is_empty and prep_poly.covers(r):
-            a = c.get('area', 0.0)
-            if best_orig is None or a > best_orig['area']:
+            a = c.get("area", 0.0)
+            if best_orig is None or a > best_orig["area"]:
                 best_orig = {
-                    'rect': r, 'area': a, 'angle': c.get('angle', 0.0),
+                    "rect": r,
+                    "area": a,
+                    "angle": c.get("angle", 0.0),
                 }
 
     if best_orig is None:
@@ -444,22 +483,24 @@ def sdf_refine(
 
     best_rect = None
     best_area = 0.0
-    best_ang  = 0.0
+    best_ang = 0.0
 
     # ── Smooth polygon direct solve ──────────────────────────────────────
     if is_smooth_poly:
         smooth_budget = max(timeout_ms_total * 0.6, 10.0)
         r, a, ang = sdf_solve_smooth(
-            poly, max_ratio=max_ratio, timeout_ms=smooth_budget)
+            poly, max_ratio=max_ratio, timeout_ms=smooth_budget
+        )
         if r is not None and a > best_area:
             best_rect, best_area, best_ang = r, a, ang
 
     # ── Candidate refinement ─────────────────────────────────────────────
     valid_cands = [
-        c for c in candidates
-        if c.get('rect') is not None
-        and not c.get('rect').is_empty
-        and prep_poly.covers(c['rect'])
+        c
+        for c in candidates
+        if c.get("rect") is not None
+        and not c.get("rect").is_empty
+        and prep_poly.covers(c["rect"])
     ]
 
     if valid_cands:
@@ -470,10 +511,10 @@ def sdf_refine(
             if elapsed > timeout_ms_total:
                 break
 
-            rect = cand['rect']
+            rect = cand["rect"]
             cx0 = float(rect.centroid.x)
             cy0 = float(rect.centroid.y)
-            angle_hint = cand.get('angle', 0.0)
+            angle_hint = cand.get("angle", 0.0)
 
             coords = list(rect.exterior.coords)
             if len(coords) < 5:
@@ -492,7 +533,12 @@ def sdf_refine(
                 break
 
             r, a, ang = _solve_5d(
-                poly, cx0, cy0, hw, hh, angle_hint,
+                poly,
+                cx0,
+                cy0,
+                hw,
+                hh,
+                angle_hint,
                 max_ratio=max_ratio,
                 angle_win=_ANGLE_WIN,
                 timeout_ms=slot,
@@ -503,6 +549,6 @@ def sdf_refine(
 
     # No-regression: return original best if SDF found nothing
     if best_rect is None:
-        return best_orig['rect'], best_orig['area'], best_orig['angle']
+        return best_orig["rect"], best_orig["area"], best_orig["angle"]
 
     return best_rect, best_area, best_ang

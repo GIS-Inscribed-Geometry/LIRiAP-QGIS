@@ -81,7 +81,7 @@ _ALGORITHM_DETAILS = {
         "<li><code>USE_BUFFER/BUFFER_VALUE</code> add containment margin after solve.</li>"
         "</ul>"
     ),
-"bcrs_fast": (
+    "bcrs_fast": (
         "<p><b>Algorithm steps</b></p>"
         "<ol>"
         "<li>Angle scan with upper-bound pruning to find promising candidates.</li>"

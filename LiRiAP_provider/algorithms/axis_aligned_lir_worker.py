@@ -112,7 +112,6 @@ def _fast_feasibility_check(
     if height > poly_height or width > poly_width:
         return False
     from shapely.ops import unary_union
-    from shapely.geometry import Point
     shrunk = poly.buffer(-height / 2.0, join_style=2)
     if shrunk.is_empty:
         return False

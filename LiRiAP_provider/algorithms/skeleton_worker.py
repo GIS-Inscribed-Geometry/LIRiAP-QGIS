@@ -42,10 +42,12 @@ from shapely.wkb import loads as wkb_loads
 
 try:
     from shapely.vectorized import contains as _shp_contains_vec
+
     def _mask_from_poly(poly, xx_flat, yy_flat):
         return _shp_contains_vec(poly, xx_flat, yy_flat)
 except ImportError:
     import shapely as _shp2
+
     def _mask_from_poly(poly, xx_flat, yy_flat):
         pts = _shp2.points(xx_flat, yy_flat)
         return _shp2.contains(poly, pts)
@@ -392,7 +394,7 @@ def _edge_angles(poly):
     edges = np.vstack(all_edges)
     lengths = np.concatenate(all_lengths)
     angles = np.degrees(np.arctan2(np.abs(edges[:, 1]),
-                                    np.abs(edges[:, 0]))) % 90.0
+                                   np.abs(edges[:, 0]))) % 90.0
     bins = np.zeros(91, dtype=np.float64)
     idx = np.clip(np.round(angles).astype(np.int64), 0, 90)
     np.add.at(bins, idx, lengths)
@@ -552,7 +554,7 @@ def _grid_solve(rot_poly, grid_steps):
 
 def _solve_from_seed(poly, centroid, angle_deg, max_ratio):
     rot_poly = shp_rotate(poly, -angle_deg, origin=centroid,
-                           use_radians=False)
+                          use_radians=False)
     seed_rect, _ = _grid_solve(rot_poly, 40)
     if seed_rect is None:
         return None, 0.0
@@ -564,7 +566,7 @@ def _solve_from_seed(poly, centroid, angle_deg, max_ratio):
         return None, 0.0
     rect_rot = box(bx0, by0, bx1, by1)
     rect_world = shp_rotate(rect_rot, angle_deg, origin=centroid,
-                             use_radians=False)
+                            use_radians=False)
     return rect_world, float(rect_world.area)
 
 

@@ -46,7 +46,6 @@ import time
 import uuid
 from typing import Any
 
-
 VERBOSITY_FULL = "FULL"
 VERBOSITY_NORMAL = "NORMAL"
 VERBOSITY_SUMMARY = "SUMMARY"
@@ -105,14 +104,16 @@ class TraceEmitter:
         **ext_fields: Any,
     ) -> None:
         """Append one event to the internal buffer."""
-        self._events.append({
-            "seq": self._seq,
-            "phase": phase,
-            "type": type_,
-            "label": label[:40],
-            "narration": narration[:200],
-            "ext": ext_fields,
-        })
+        self._events.append(
+            {
+                "seq": self._seq,
+                "phase": phase,
+                "type": type_,
+                "label": label[:40],
+                "narration": narration[:200],
+                "ext": ext_fields,
+            }
+        )
         self._seq += 1
 
     def to_trace(self) -> dict:

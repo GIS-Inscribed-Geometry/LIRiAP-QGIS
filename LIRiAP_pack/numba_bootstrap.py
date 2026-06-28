@@ -113,7 +113,9 @@ def ensure_numba(feedback, attempt_install):
         cmd.append("--user")
     cmd.append("numba")
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=300)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=300
+        )
     except subprocess.TimeoutExpired:
         feedback.pushWarning("Numba install timed out after 300s.")
         return False, False
@@ -130,5 +132,7 @@ def ensure_numba(feedback, attempt_install):
         feedback.pushInfo("Numba installed successfully.")
         return True, True
 
-    feedback.pushWarning("Numba install command completed, but import check still failed.")
+    feedback.pushWarning(
+        "Numba install command completed, but import check still failed."
+    )
     return False, False
