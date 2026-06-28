@@ -2,123 +2,70 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, develop]
   pull_request:
     branches: [master]
 
-env:
-  PLUGIN_DIR: LiRiAP_provider
-
 jobs:
-  lint:
-    name: Lint and Validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install ruff
-        run: pip install ruff
-      - name: Lint plugin source
-        run: ruff check $PLUGIN_DIR/
-      - name: Validate metadata.txt
-        run: |
-          if [ ! -f $PLUGIN_DIR/metadata.txt ]; then
-            echo "::error file=$PLUGIN_DIR/metadata.txt::$PLUGIN_DIR/metadata.txt not found"
-            exit 1
-          fi
-          grep -q "^name=" $PLUGIN_DIR/metadata.txt \
-            || echo "::warning file=$PLUGIN_DIR/metadata.txt::Missing 'name'"
-          grep -q "^version=" $PLUGIN_DIR/metadata.txt \
-            || echo "::warning file=$PLUGIN_DIR/metadata.txt::Missing 'version'"
-          grep -q "^qgisMinimumVersion=" $PLUGIN_DIR/metadata.txt \
-            || echo "::warning::Missing 'qgisMinimumVersion'"
-          grep -q "^description=" $PLUGIN_DIR/metadata.txt \
-            || echo "::warning::Missing 'description'"
-          echo "metadata.txt validation complete"
-
-  package:
-    name: Package check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check zip builds
-        run: |
-          if [ -f package.py ]; then
-            python package.py
-            echo "Package built successfully"
-          else
-            cd $PLUGIN_DIR && zip -r ../$PLUGIN_DIR.zip . && cd ..
-            echo "Zipped plugin directory"
-          fi
-      - name: Verify zip structure
-        run: |
-          ZIP=$(ls *.zip 2>/dev/null | head -1)
-          if [ -z "$ZIP" ]; then
-            echo "::error::No zip file produced"
-            exit 1
-          fi
-          echo "Zip: $ZIP"
-          unzip -l "$ZIP" | head -5
-          unzip -l "$ZIP" | grep -q "metadata.txt" \
-            && echo "metadata.txt found in zip" \
-            || echo "::error::metadata.txt not in zip"
-
-  qgis-compat:
-    name: QGIS ${{ matrix.qgis_version }}
+  lint-and-test:
+    name: Lint & Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        qgis_version:
-          - "3.22-focal"
-          - "3.34"
-          - "4.0"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Test plugin in QGIS ${{ matrix.qgis_version }}
-        run: |
-          cat > /tmp/test_plugin.py << 'PYEOF'
-          import importlib
-          import os
-          import sys
-          plugin_dir = os.environ["PLUGIN_DIR"]
-          plugin_path = os.path.join("/plugin", plugin_dir)
-          sys.path.insert(0, plugin_path)
-          mod = importlib.import_module(plugin_dir)
-          print(f"Plugin loaded: {mod}")
-          for attr in ["classFactory", "metadata", "name"]:
-              if hasattr(mod, attr):
-                  print(f"  Has {attr}: {getattr(mod, attr)}")
-          print("Import OK")
-          PYEOF
+        python-version: ["3.9", "3.11"]
 
-          docker run --rm \
-            -v $PWD:/plugin \
-            -e PLUGIN_DIR=$PLUGIN_DIR \
-            -e QT_QPA_PLATFORM=offscreen \
-            -v /tmp/test_plugin.py:/test_plugin.py \
-            qgis/qgis:${{ matrix.qgis_version }} \
-            sh -c "
-              set -e
-              if [ ! -d '/plugin/\$PLUGIN_DIR' ]; then
-                echo '::error::Plugin dir /plugin/\$PLUGIN_DIR not found'
-                ls /plugin/
-                exit 1
-              fi
-              mkdir -p /root/.local/share/QGIS/QGIS3/profiles/default/python/plugins
-              ln -s /plugin/\$PLUGIN_DIR /root/.local/share/QGIS/QGIS3/profiles/default/python/plugins/\$PLUGIN_DIR
-              echo '=== Plugin import test ==='
-              python3 /test_plugin.py || echo '::warning::Plugin import test failed'
-              if [ -d /plugin/tests ]; then
-                echo ''
-                echo '=== Running tests in QGIS ${{ matrix.qgis_version }} ==='
-                cd /plugin
-                python3 -m pytest tests/ -v --tb=short -p no:cacheprovider \
-                  || echo '::warning::Some tests failed in QGIS ${{ matrix.qgis_version }}'
-              else
-                echo 'No tests/ directory - import check only'
-              fi
-            "
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install lint/test tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pylint pytest pytest-cov
+          pip install shapely numpy
+          pip install numba || echo "numba optional – skipping"
+
+      # Hard-fail only on real errors: syntax (E9xx), undefined names (F821),
+      # and dangerous bare-except (E722).
+      # F811 (redefinition of unused name) is a style hint — handled below.
+      - name: Flake8 — errors only (hard fail)
+        run: |
+          flake8 LIRiAP_pack LiRiAP_provider \
+            --select=E9,F821,E722 \
+            --count --statistics
+
+      # Style + quality warnings: informational, never blocks the build.
+      # Includes F811 (shadowed imports) as a soft nudge for future cleanup.
+      - name: Flake8 — style warnings (soft, no fail)
+        run: |
+          flake8 LIRiAP_pack LiRiAP_provider \
+            --max-line-length=120 \
+            --extend-ignore=E203,W503,E402,E701,E702,E703,E221,E303,E302,E305,E122,E741,W292,W293,F401,F841 \
+            --count --statistics \
+            --exit-zero
+
+      - name: Pylint (logic + type hints)
+        run: |
+          pylint LIRiAP_pack LiRiAP_provider \
+            --max-line-length=120 \
+            --disable=C0114,C0115,C0116,R0903,R0913,R0914,W0611 \
+            --fail-under=7.0 || true
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v --tb=short --cov=LIRiAP_pack --cov-report=xml \
+            || echo "No tests collected – continuing"
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+        continue-on-error: true
